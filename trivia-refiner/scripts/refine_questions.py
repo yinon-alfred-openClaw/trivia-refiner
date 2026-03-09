@@ -1,18 +1,14 @@
 #!/usr/bin/env python3
 """
 Trivia Question Refiner
-Fetches 10 questions, rephrase with Gemini Flash, gets Sonnet feedback,
-chooses category/difficulty, then asks for approval before submitting to DB.
+Fetches 10 unprocessed questions starting from the last edited ID.
 """
 
 import json
 import sys
 import urllib.request
 import os
-
-# Tracking — import from same scripts/ directory
-sys.path.insert(0, os.path.dirname(__file__))
-from tracking import get_processed_ids_set, add_processed_id, print_summary
+from tracking import get_stats, get_last_edited_id
 
 # Load credentials from memory/supabase-creds.json
 creds_path = os.path.expanduser("~/.openclaw/workspace/memory/supabase-creds.json")
@@ -25,9 +21,10 @@ except Exception as e:
     print(f"Error loading credentials from {creds_path}: {e}")
     sys.exit(1)
 
-def fetch_questions(limit=30):
-    """Fetch unapproved questions from the Questions table."""
-    url = f"{SUPABASE_URL}/rest/v1/Questions?limit={limit}&order=id.asc"
+def fetch_questions_from_id(start_id, limit=10):
+    """Fetch questions starting from a specific ID (greater than start_id)."""
+    # Use 'gt' (greater than) to skip the start_id itself
+    url = f"{SUPABASE_URL}/rest/v1/Questions?id=gt.{start_id}&limit={limit}&order=id.asc"
     headers = {
         "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}"
@@ -72,41 +69,34 @@ def format_question_for_display(q):
     }
 
 def main():
-    # ── Show tracking stats upfront ──────────────────────────────────────────
-    print_summary()
-    already_refined = get_processed_ids_set()
-    print()
-
-    # Fetch more than needed so we have enough after filtering
-    FETCH_LIMIT = 30
-    TARGET = 10
-
-    print(f"🔄 Fetching up to {FETCH_LIMIT} questions from database...")
-    questions = fetch_questions(FETCH_LIMIT)
-
+    # Show tracking stats upfront
+    stats = get_stats()
+    if stats["total_processed"] > 0:
+        print(f"📊 Tracking Stats: {stats['refined']} refined, {stats['failed']} failed")
+        print(f"   Last updated: {stats['last_updated']}\n")
+    
+    # Get the last edited ID from tracking
+    last_edited_id = get_last_edited_id()
+    next_start_id = last_edited_id + 1
+    
+    print(f"🔄 Fetching 10 questions starting from ID {next_start_id}...")
+    questions = fetch_questions_from_id(last_edited_id, limit=10)
+    
     if not questions:
-        print("❌ No questions found.")
+        if last_edited_id == 0:
+            print("❌ No questions found in the database.")
+        else:
+            print(f"✅ All questions processed! (reached ID {last_edited_id})")
+            print(f"   No more unprocessed questions available.")
         return
-
-    # ── Skip already-processed questions ────────────────────────────────────
-    new_questions = [q for q in questions if q.get("id") not in already_refined]
-    skipped_count = len(questions) - len(new_questions)
-
-    if skipped_count:
-        print(f"⏭️  Skipped {skipped_count} already-refined question(s)")
-
-    if not new_questions:
-        print("🎉 All fetched questions have already been refined. Nothing to do!")
-        return
-
-    # Trim to target batch size
-    questions = new_questions[:TARGET]
-    print(f"✅ Processing {len(questions)} new questions")
-
-    print("\n📋 Fetching categories...")
+    
+    actual_ids = [q.get("id") for q in questions]
+    print(f"✅ Fetched {len(questions)} questions (IDs {actual_ids[0]}–{actual_ids[-1]})\n")
+    
+    print("📋 Fetching categories...")
     categories = fetch_categories()
     category_list = "\n".join([f"{c['id']}. {c['name']}" for c in categories])
-
+    
     # Prepare data structure for processing
     all_questions = []
     for q in questions:

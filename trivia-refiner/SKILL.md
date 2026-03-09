@@ -5,140 +5,154 @@ description: "Refine trivia questions by rephrasing with Gemini Flash, reviewing
 
 # Trivia Refiner
 
-Automate the improvement of trivia questions through a multi-stage pipeline: fetch raw questions, rephrase them naturally, regenerate incorrect options, review for quality, categorize, and submit approved changes.
+Fetch 10 questions, process them silently in the background, then show one clean before/after comparison message. User approves → submit to database.
 
 ## Quick Start
-
-### 1. Initiate the Refinement Pipeline
 
 ```bash
 python3 skills/trivia-refiner/scripts/refine_questions.py
 ```
 
-This will:
-- Fetch 10 questions from the database
-- Display them with options and categories
-- Show available category IDs for reference
+Then spawn subagents (see below), compile results, present ONE message to user.
 
-### 2. Process with Agents (Parallel)
+---
 
-For each question, spawn two concurrent subagent tasks:
+## Workflow
 
-**Task A: Rephrase with Gemini Flash**
-- Take the original Hebrew question
-- Rephrase it for clarity and naturalness
-- Regenerate 2-3 of the incorrect options (keep the correct answer unchanged)
+### Step 1 — Fetch
 
-**Task B: Review with Sonnet**
-- Check the rephrasing for grammar and naturalness
-- Validate that options are plausible and clearly distinguishable
-- Flag any issues
+Run `scripts/refine_questions.py` — it reads the last processed ID from tracking and fetches the next 10 questions. **Do not show output to the user.**
 
-**Task C: Categorize with Sonnet**
-- Choose the best category ID from `trivia_categories`
-- Assign difficulty: "easy", "medium", or "hard"
+### Step 2 — Process (silent, background)
 
-### 3. Review & Approve
+Spawn a **single Gemini Flash subagent** for ALL 10 questions at once:
 
-Compile all changes into a single table showing:
-- ID | Original Question | Rephrased Question | New Options | Category ID | Difficulty
+- **MANDATORY:** Rephrase every question in natural Hebrew
+- **OPTIONAL:** Improve 1-2 wrong options if they are obviously poor
+- Keep the correct answer unchanged (unless the question structure inverts — see Step 3)
+- All text must be **Hebrew only** — no English, no parentheses with translations
 
-Present to user with: **"Do you approve these changes? (yes/no)"**
+Prompt format (send all 10 in one call):
 
-### 4. Submit to Database (If Approved)
+```
+For each question:
+1. Rephrase the question (mandatory)
+2. Keep correct answer the same
+3. Optionally improve weak wrong options
 
-If user approves, update each question:
-```python
-{
-  "Question": "rephrased question text",
-  "Option 1": "new option",
-  "Option 2": "new option",
-  "Option 3": "new option",
-  "Option 4": "new option",
-  "category_id": 27,
-  "difficulty": "easy"
-}
+Return format:
+ID:N
+NEW_Q: [rephrased question]
+OPT1: [option]
+OPT2: [option]
+OPT3: [option]
+OPT4: [option]
+CORRECT: [correct answer]
+
+If question data is corrupted: write "SKIP" under the ID.
 ```
 
-Note: `Category` (original text), `Correct Answer` remain unchanged.
+### Step 3 — Categorize & Review (silent, background)
 
-## How It Works
+Spawn a **single Sonnet subagent** for all valid questions at once:
 
-### Stage 1: Fetch
-Run the fetch script to pull 10 questions and display them.
+- Assign the best category ID from `trivia_categories`
+- Assign difficulty: easy / medium / hard
 
-### Stage 2: Rephrase (Gemini Flash)
-Spawn a subagent with:
+Return format:
 ```
-model: "google/gemini-2.5-flash"
-task: "Rephrase this Hebrew trivia question for clarity and naturalness. Regenerate 2-3 incorrect options but keep the correct answer the same."
+ID:N | CAT:XX | DIFF:easy
 ```
 
-### Stage 3: Review (Sonnet)
-Spawn a subagent with:
+### Step 4 — Detect Issues (silent, internal)
+
+Before presenting to user, check each question for:
+
+- **Corrupted data** — question text makes no sense (e.g. contains ingredient names instead of a question). Mark as ⚠️ SKIP.
+- **Inverted question** — Gemini rephrased the question in a way that the original correct answer no longer appears in the options (meaning the question structure flipped). Flag this explicitly so Alfred can decide whether to update the Correct Answer field too or skip.
+
+### Step 5 — Present ONE message to user
+
+Format ALL questions into a single clean message. Show old vs new side by side. Include the correct answer. Flag any issues. Do NOT send intermediate messages.
+
+**Template:**
+
 ```
-model: "sonnet"
-task: "Review the rephrased question. Check: (1) Hebrew grammar/naturalness, (2) Options are plausible, (3) Correct answer is still correct. Suggest any fixes needed."
+ID:1
+🔴 [original question]
+[opt1] | [opt2] | [opt3] | [opt4] | ✓ [correct answer]
+🟢 [rephrased question]
+[opt1] | [opt2] | [opt3] | [opt4] | ✓ [correct answer]
+📁 [category_id] | ⚡ [difficulty]
+
+---
+
+ID:2
+🔴 ...
+🟢 ...
+📁 ... | ⚡ ...
+
+---
+
+ID:5 — ⚠️ דילוג — שאלה פגומה בבסיס הנתונים
+
+---
+
+ID:9 — ⚠️ שאלה הופכה — התשובה הנכונה השתנתה. הוגשה עם תשובה מעודכנת: [new correct answer]
+
+---
+
+האם לאשר ולשלוח את השינויים לבסיס הנתונים? ✅ / ❌
 ```
 
-### Stage 4: Categorize (Sonnet)
-Spawn a subagent with:
-```
-model: "sonnet"
-task: "Choose the best category ID from the trivia_categories list. Assign difficulty: easy/medium/hard. Explain your choices."
-```
+### Step 6 — Submit on approval
 
-### Stage 5: Compile & Display
-Format all results into a table and ask for approval.
+If user approves:
+1. Write all changes to `/tmp/trivia_changes.json`
+2. Run `scripts/submit_changes.py /tmp/trivia_changes.json`
+3. For inverted questions where Correct Answer changed — submit via direct PATCH (not through submit_changes.py, which preserves the original Correct Answer)
+4. Tracking file updates automatically after each successful submission
 
-### Stage 6: Submit
-If approved, use `submit_changes.py` to PATCH each question to the database.
+---
+
+## Key Rules
+
+| Rule | Detail |
+|------|--------|
+| Rephrasing | MANDATORY for every question |
+| Option changes | OPTIONAL — only if clearly improving |
+| Language | Hebrew only — no English additions |
+| Correct Answer | Keep unchanged unless question structure inverts |
+| User messages | ONE message only (the comparison). Everything else is silent. |
+| Corrupted data | Flag as ⚠️ SKIP — do not submit |
+| Inverted questions | Flag clearly — submit with updated Correct Answer if user approved |
+| Fetch cursor | Reads last processed ID from tracking file — always fetches next 10 |
+
+---
 
 ## Scripts
 
 ### `scripts/refine_questions.py`
-Fetch 10 questions and display them with metadata.
+Fetches next 10 unprocessed questions using cursor-based pagination (`id > last_edited_id LIMIT 10`).
 
-**Usage:**
-```bash
-python3 scripts/refine_questions.py
-```
+Returns: list of questions with all fields.
 
-**Output:**
-- Lists 10 questions with ID, original text, options, and correct answer
-- Shows available categories for reference
+### `scripts/submit_changes.py <changes.json>`
+Validates and submits changes. Tracks success/failure in `trivia-refiner-processed.json`.
 
-### `scripts/submit_changes.py`
-Submit approved changes to the database.
+Supports `--dry-run` flag for testing.
 
-**Usage:**
-```bash
-python3 scripts/submit_changes.py changes.json
-```
+### `scripts/tracking.py`
+- `get_last_edited_id()` — returns highest processed ID (cursor for next fetch)
+- `add_processed_id(id, status, **meta)` — log a question result
+- `get_stats()` — show totals
 
-**Input file format (JSON array):**
-```json
-[
-  {
-    "id": 1,
-    "Question": "rephrased question",
-    "Option 1": "new option",
-    "Option 2": "new option",
-    "Option 3": "new option",
-    "Option 4": "new option",
-    "category_id": 27,
-    "difficulty": "easy"
-  },
-  ...
-]
-```
+---
 
-## Key Details
+## Credentials
 
-### Credentials
 Reads from: `~/.openclaw/workspace/memory/supabase-creds.json`
 
-Must contain:
 ```json
 {
   "url": "https://xxxx.supabase.co",
@@ -146,41 +160,30 @@ Must contain:
 }
 ```
 
-### Categories
-Fetched from `trivia_categories` table. Common IDs:
-- 9: ידע כללי (General Knowledge)
-- 27: בעלי חיים (Animals)
-- 22: גאוגרפיה (Geography)
-- 23: היסטוריה (History)
+---
 
-See `references/workflow.md` for full category list.
+## Database Schema
 
-### Database Schema
-See `references/workflow.md` for detailed field descriptions and examples.
+```
+Questions table:
+  id            int (PK)
+  Category      text (original category string — keep unchanged)
+  Question      text ← update
+  Option 1-4    text ← update
+  Correct Answer text ← keep unchanged (update only if question inverted)
+  category_id   int (FK → trivia_categories) ← update
+  difficulty    text (easy/medium/hard) ← update
 
-## Best Practices
+trivia_categories table:
+  id    int (PK)
+  name  text (Hebrew)
+```
 
-1. **Always review before submitting** — The approval step is your safeguard
-2. **Check Hebrew quality** — Sonnet should catch awkward phrasing
-3. **Validate options** — Ensure wrong options are plausible but clearly incorrect
-4. **Consistent difficulty assessment** — Use Sonnet consistently across all 10
-5. **Keep correct answers unchanged** — Never modify `Correct Answer` field
+---
 
-## Troubleshooting
+## Subagent Models
 
-**Script fails with credential error:**
-- Ensure `memory/supabase-creds.json` exists and is readable
-- Check that it contains `url` and `key` fields
-
-**Subagent fails to spawn:**
-- Verify model name is correct (`google/gemini-2.5-flash` or `sonnet`)
-- Check that the model is available in your OpenClaw config
-
-**Database update fails:**
-- Verify question ID exists in the database
-- Check that `category_id` matches a real category
-- Ensure `difficulty` is one of: "easy", "medium", "hard"
-
-## Workflow Reference
-
-For detailed workflow documentation, see `references/workflow.md`.
+| Task | Model |
+|------|-------|
+| Rephrasing + option improvement | `google/gemini-2.5-flash` |
+| Categorization + difficulty | `sonnet` |

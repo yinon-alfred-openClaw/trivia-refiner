@@ -8,9 +8,6 @@ import json
 import sys
 import urllib.request
 import os
-
-# Tracking
-sys.path.insert(0, os.path.dirname(__file__))
 from tracking import add_processed_id
 
 # Load credentials from memory/supabase-creds.json
@@ -23,6 +20,23 @@ try:
 except Exception as e:
     print(f"Error loading credentials from {creds_path}: {e}")
     sys.exit(1)
+
+VALID_DIFFICULTIES = {"easy", "medium", "hard"}
+REQUIRED_FIELDS = {"Question", "Option 1", "Option 2", "Option 3", "Option 4", "category_id", "difficulty"}
+
+def validate_change(change):
+    """Validate that a change has all required fields."""
+    missing = REQUIRED_FIELDS - set(change.keys())
+    if missing:
+        return False, f"Missing fields: {', '.join(missing)}"
+    
+    if change.get("difficulty") not in VALID_DIFFICULTIES:
+        return False, f"Invalid difficulty '{change['difficulty']}'. Must be: {', '.join(VALID_DIFFICULTIES)}"
+    
+    if not isinstance(change.get("category_id"), int) or change.get("category_id") <= 0:
+        return False, f"Invalid category_id '{change.get('category_id')}'. Must be a positive integer."
+    
+    return True, "Valid"
 
 def update_question(question_id, data):
     """Update a single question in the database."""
@@ -44,17 +58,40 @@ def update_question(question_id, data):
     try:
         with urllib.request.urlopen(req) as response:
             result = json.loads(response.read().decode())
+            if result:
+                # Mark as successfully refined
+                add_processed_id(
+                    question_id,
+                    "refined",
+                    difficulty=data.get("difficulty"),
+                    category_id=data.get("category_id")
+                )
             return result[0] if result else None
+    except urllib.error.HTTPError as e:
+        # Try to read error body for more details
+        try:
+            error_body = e.read().decode()
+            error_msg = f"{e} — {error_body}"
+        except:
+            error_msg = str(e)
+        
+        # Mark as failed
+        add_processed_id(question_id, "failed", error=error_msg)
+        print(f"Error updating question {question_id}: {error_msg}")
+        return None
     except Exception as e:
+        # Mark as failed
+        add_processed_id(question_id, "failed", error=str(e))
         print(f"Error updating question {question_id}: {e}")
         return None
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python3 submit_changes.py <changes_file.json>")
+        print("Usage: python3 submit_changes.py <changes_file.json> [--dry-run]")
         sys.exit(1)
     
     changes_file = sys.argv[1]
+    dry_run = "--dry-run" in sys.argv
     
     try:
         with open(changes_file) as f:
@@ -66,7 +103,33 @@ def main():
     if not isinstance(changes, list):
         changes = [changes]
     
-    print(f"📤 Submitting {len(changes)} question updates...")
+    # Validate all changes first
+    print(f"🔍 Validating {len(changes)} changes...")
+    invalid = []
+    for idx, change in enumerate(changes):
+        valid, msg = validate_change(change)
+        if not valid:
+            invalid.append((change.get("id"), msg))
+    
+    if invalid:
+        print(f"\n❌ Found {len(invalid)} validation error(s):\n")
+        for qid, msg in invalid:
+            print(f"  Question {qid}: {msg}")
+        print("\n⚠️  Please fix the errors and try again.")
+        return
+    
+    print(f"✅ All changes are valid\n")
+    
+    if dry_run:
+        print("🏜️  DRY RUN — No changes will be submitted")
+        print(f"Would update {len(changes)} questions:\n")
+        for change in changes:
+            qid = change.get("id")
+            print(f"  • Question {qid}: {change.get('difficulty')} difficulty, category {change.get('category_id')}")
+        print("\nTo actually submit, run without --dry-run flag")
+        return
+    
+    print(f"📤 Submitting {len(changes)} question updates...\n")
     
     successful = 0
     failed = 0
@@ -78,15 +141,14 @@ def main():
         result = update_question(question_id, update_data)
         if result:
             successful += 1
-            add_processed_id(question_id, status="refined")
             print(f"  ✅ Question {question_id} updated")
         else:
             failed += 1
-            add_processed_id(question_id, status="failed", notes="PATCH returned empty/error")
             print(f"  ❌ Question {question_id} failed")
     
     print(f"\n{'='*60}")
     print(f"Results: {successful} succeeded, {failed} failed")
+    print(f"Tracking file: {os.path.expanduser('~/.openclaw/workspace/memory/trivia-refiner-processed.json')}")
     print(f"{'='*60}")
 
 if __name__ == "__main__":
