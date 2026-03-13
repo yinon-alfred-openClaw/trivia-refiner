@@ -28,9 +28,16 @@ Run `scripts/refine_questions.py` — it reads the last processed ID from tracki
 Spawn a **single Gemini Flash subagent** for ALL 10 questions at once:
 
 - **MANDATORY:** Rephrase every question in natural Hebrew
-- **OPTIONAL:** Improve 1-2 wrong options if they are obviously poor
+- **MANDATORY:** Review every wrong option individually — replace if too specific (see Option Rules below)
 - Keep the correct answer unchanged (unless the question structure inverts — see Step 3)
 - All text must be **Hebrew only** — no English, no parentheses with translations
+
+**Option Rules:**
+- **REPLACE** if the option is too specific: unique proper nouns, specific song titles, specific person names, niche references that could only come from a copyrighted quiz source
+- **KEEP** if the option is generic enough: common city names, sport names, general concepts, well-known public figures already in the question context
+- When replacing, use a plausible alternative of the same type (e.g. song title → different song title, name → different name in the same field)
+- **NEVER** replace a wrong option with the correct answer, even partially
+- Add a 📝 note for every option changed: "אופציה שונתה: [old] → [new]"
 
 Prompt format (send all 10 in one call):
 
@@ -120,7 +127,7 @@ If user approves:
 | Rule | Detail |
 |------|--------|
 | Rephrasing | MANDATORY for every question |
-| Option changes | OPTIONAL — only if clearly improving |
+| Option changes | MANDATORY review — replace specific ones, keep generic ones |
 | Language | Hebrew only — no English additions |
 | Correct Answer | Keep unchanged unless question structure inverts |
 | User messages | ONE message only (the comparison). Everything else is silent. |

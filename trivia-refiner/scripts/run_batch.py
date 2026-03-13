@@ -10,7 +10,6 @@ import json
 import os
 import sys
 import urllib.request
-import subprocess
 
 # Load credentials
 creds_path = os.path.expanduser("~/.openclaw/workspace/memory/supabase-creds.json")
@@ -81,12 +80,19 @@ OPT1:{q.get('Option 1','')} | OPT2:{q.get('Option 2','')} | OPT3:{q.get('Option 
 
     return f"""You are processing Hebrew trivia questions. You must do THREE tasks and return ONLY the final formatted output — nothing else.
 
-TASK 1 — REPHRASE each question:
+TASK 1 — REPHRASE each question AND review its wrong options:
 - Rephrasing is MANDATORY for every question
 - Hebrew only — no English, no parentheses with translations
-- Keep the correct answer unchanged
-- Optionally improve 1-2 weak wrong options
+- Keep the correct answer UNCHANGED — never alter it, never use it as a wrong option
 - If question data is clearly corrupted (e.g. contains unrelated words like ingredient names), mark it SKIP
+
+OPTION RULES (apply to every wrong option individually):
+- You MUST change at least one wrong option per question — no exceptions
+- REPLACE any option that is too specific: unique proper nouns, specific song titles, specific person names, or niche references that could only come from a copyrighted quiz source
+- Even if all options seem generic, still replace at least one with a plausible alternative of the same type (e.g. swap one band name for a different real band name, one city for another city, one historical figure for another)
+- When replacing, use a plausible alternative of the same type — realistic enough to be a believable wrong answer
+- NEVER replace a wrong option with the correct answer text, even partially
+- Add a 📝 note for every option you change: "אופציה שונתה: [old] → [new]"
 
 TASK 2 — CATEGORIZE each question:
 Available categories: {cat_list}
@@ -129,25 +135,14 @@ QUESTIONS TO PROCESS:
 Return ONLY the formatted output. No explanations, no preamble, no markdown code blocks."""
 
 def call_sonnet(prompt):
-    """Call Sonnet via openclaw sessions_spawn subagent"""
-    try:
-        # Call OpenClaw subagent with Sonnet
-        result = subprocess.run([
-            "openclaw", "sessions_spawn",
-            "--runtime", "subagent",
-            "--mode", "run",
-            "--model", "sonnet",
-            "--task", prompt
-        ], capture_output=True, text=True, timeout=120)
-        
-        if result.returncode != 0:
-            print(f"❌ Sonnet error: {result.stderr}", file=sys.stderr)
-            return None
-        
-        return result.stdout.strip()
-    except Exception as e:
-        print(f"❌ Error calling Sonnet: {e}", file=sys.stderr)
-        return None
+    """
+    NOTE: This function is intentionally left as a passthrough.
+    run_batch.py outputs the prompt + raw questions for Alfred (Claude)
+    to process directly in the session. Alfred applies the option-change
+    rules and rephrasing, then the user approves before submit_changes.py runs.
+    Returning None here signals main() to print the prompt for Alfred instead.
+    """
+    return None
 
 def main():
     batch_count = get_batch_count()
@@ -164,21 +159,16 @@ def main():
     categories = fetch_categories()
     prompt = build_orchestrator_prompt(questions, categories)
     
-    # Call Sonnet to process the batch
-    print(f"🔄 עיבוד בצ'ים {batch_count + 1}/10...", file=sys.stderr)
-    response = call_sonnet(prompt)
-    
-    if not response:
-        print("❌ שגיאה בעיבוד השאלות. אנא נסה שוב.")
-        return
-    
-    # Output formatted comparison (cron's --announce sends this to Telegram)
-    header = f"📋 **בצ'ים {batch_count + 1}/10 — {len(questions)} שאלות**\n\n"
-    print(header + response)
+    # Output the prompt for Alfred to process directly in the session
+    print(f"📋 **בצ'ים {batch_count + 1}/10 — {len(questions)} שאלות | IDs {questions[0]['id']}–{questions[-1]['id']}**")
+    print()
+    print("Alfred — process the following questions using the rules below:")
+    print()
+    print(prompt)
     
     # Increment batch count
     increment_batch_count()
-    print(f"✅ בצ'ים {batch_count + 1} שלח לאישור.", file=sys.stderr)
+    print(f"\n✅ בצ'ים {batch_count + 1} מוכן לעיבוד.", file=sys.stderr)
 
 if __name__ == "__main__":
     main()
