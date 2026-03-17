@@ -39,20 +39,35 @@ def validate_change(change):
     return True, "Valid"
 
 def update_question(question_id, data):
-    """Update a single question in the database."""
-    url = f"{SUPABASE_URL}/rest/v1/Questions?id=eq.{question_id}"
+    """Update a question via the update_question RPC.
+    Atomically updates raw_questions_he AND upserts into questions_he.
+    Direct writes to questions_he are blocked by RLS — this is the only write path.
+    """
+    url = f"{SUPABASE_URL}/rest/v1/rpc/update_question"
     headers = {
         "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}",
         "Content-Type": "application/json",
         "Prefer": "return=representation"
     }
-    
+
+    rpc_payload = {
+        "p_id": question_id,
+        "p_question": data.get("Question"),
+        "p_option_1": data.get("Option 1"),
+        "p_option_2": data.get("Option 2"),
+        "p_option_3": data.get("Option 3"),
+        "p_option_4": data.get("Option 4"),
+        "p_correct_answer": data.get("Correct Answer"),
+        "p_category_id": data.get("category_id"),
+        "p_difficulty": data.get("difficulty")
+    }
+
     req = urllib.request.Request(
         url,
-        data=json.dumps(data).encode('utf-8'),
+        data=json.dumps(rpc_payload).encode('utf-8'),
         headers=headers,
-        method='PATCH'
+        method='POST'
     )
     
     try:

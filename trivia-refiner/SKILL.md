@@ -172,7 +172,7 @@ Reads from: `~/.openclaw/workspace/memory/supabase-creds.json`
 ## Database Schema
 
 ```
-Questions table:
+raw_questions_he table (source — read & fetch from here):
   id            int (PK)
   Category      text (original category string — keep unchanged)
   Question      text ← update
@@ -181,10 +181,21 @@ Questions table:
   category_id   int (FK → trivia_categories) ← update
   difficulty    text (easy/medium/hard) ← update
 
-trivia_categories table:
+questions_he table (production — write ONLY via update_question RPC):
+  Same schema. Direct writes blocked by RLS.
+  Only questions approved through the pipeline live here.
+
+trivia_categories (via get_all_categories RPC):
   id    int (PK)
   name  text (Hebrew)
 ```
+
+### API Endpoints
+- **Fetch questions:** `GET /rest/v1/raw_questions_he`
+- **Fetch categories:** `POST /rest/v1/rpc/get_all_categories`
+- **Submit approved batch:** `POST /rest/v1/rpc/update_question`
+  - Params: `p_id`, `p_question`, `p_option_1`–`p_option_4`, `p_correct_answer`, `p_category_id`, `p_difficulty`
+  - Atomically updates `raw_questions_he` + upserts into `questions_he`
 
 ---
 
