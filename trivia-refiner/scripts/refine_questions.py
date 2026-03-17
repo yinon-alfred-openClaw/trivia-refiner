@@ -24,7 +24,7 @@ except Exception as e:
 def fetch_questions_from_id(start_id, limit=10):
     """Fetch questions starting from a specific ID (greater than start_id)."""
     # Use 'gt' (greater than) to skip the start_id itself
-    url = f"{SUPABASE_URL}/rest/v1/Questions?id=gt.{start_id}&limit={limit}&order=id.asc"
+    url = f"{SUPABASE_URL}/rest/v1/raw_questions_he?id=gt.{start_id}&limit={limit}&order=id.asc"
     headers = {
         "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}"
@@ -39,14 +39,15 @@ def fetch_questions_from_id(start_id, limit=10):
         return []
 
 def fetch_categories():
-    """Fetch all categories from trivia_categories table."""
-    url = f"{SUPABASE_URL}/rest/v1/trivia_categories?order=id.asc"
+    """Fetch all categories via get_all_categories RPC."""
+    url = f"{SUPABASE_URL}/rest/v1/rpc/get_all_categories"
     headers = {
         "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}"
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json"
     }
-    
-    req = urllib.request.Request(url, headers=headers)
+
+    req = urllib.request.Request(url, data=b'{}', headers=headers, method='POST')
     try:
         with urllib.request.urlopen(req) as response:
             return json.loads(response.read().decode())

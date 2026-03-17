@@ -47,7 +47,7 @@ def increment_batch_count():
         json.dump(data, f, indent=2, ensure_ascii=False)
 
 def fetch_questions(after_id, limit=10):
-    url = f"{SUPABASE_URL}/rest/v1/Questions?id=gt.{after_id}&limit={limit}&order=id.asc"
+    url = f"{SUPABASE_URL}/rest/v1/raw_questions_he?id=gt.{after_id}&limit={limit}&order=id.asc"
     headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
     req = urllib.request.Request(url, headers=headers)
     try:
@@ -58,9 +58,9 @@ def fetch_questions(after_id, limit=10):
         return []
 
 def fetch_categories():
-    url = f"{SUPABASE_URL}/rest/v1/trivia_categories?order=id.asc"
-    headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
-    req = urllib.request.Request(url, headers=headers)
+    url = f"{SUPABASE_URL}/rest/v1/rpc/get_all_categories"
+    headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"}
+    req = urllib.request.Request(url, data=b'{}', headers=headers, method='POST')
     try:
         with urllib.request.urlopen(req) as response:
             return json.loads(response.read().decode())
