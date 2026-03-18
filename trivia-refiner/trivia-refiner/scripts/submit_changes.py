@@ -39,8 +39,8 @@ def validate_change(change):
     return True, "Valid"
 
 def update_question(question_id, data):
-    """Update a question via direct PATCH (service key bypasses RLS).
-    Updates raw_questions_he AND upserts into questions_he.
+    """Update a question via direct PATCH to raw_questions_he.
+    Service key bypasses RLS. Also upserts into questions_he.
     """
     headers = {
         "apikey": SUPABASE_KEY,
