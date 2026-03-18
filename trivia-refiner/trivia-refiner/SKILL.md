@@ -5,6 +5,11 @@ description: "Refine trivia questions by rephrasing with Gemini Flash, reviewing
 
 # Trivia Refiner
 
+**🎯 DATABASE: Quiz Supabase (`uhfsfedwteeoxsvixvtr`)**  
+This skill operates on **Yinon's Quiz Database**, NOT Alfred's personal Supabase instance.
+- `raw_questions_he` — source table with all scraped questions (read & update)
+- `questions_he` — production table with refined questions only (auto-upserted on approval)
+
 Fetch 10 questions, process them silently in the background, then show one clean before/after comparison message. User approves → submit to database.
 
 ## Quick Start

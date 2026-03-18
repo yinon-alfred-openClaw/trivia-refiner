@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
 """
-Submit approved question changes to the Supabase database.
+Submit approved question changes to the QUIZ SUPABASE DATABASE (uhfsfedwteeoxsvixvtr).
+
+IMPORTANT: This script updates TWO tables:
+  1. raw_questions_he — the source table with all scraped questions
+  2. questions_he — the production table (auto-upserted with refined questions only)
+
 Expects a JSON file with the changes to be applied.
+Credentials loaded from ~/.openclaw/workspace/memory/supabase-creds.json (Quiz DB, not Alfred's DB)
 """
 
 import json
@@ -39,8 +45,14 @@ def validate_change(change):
     return True, "Valid"
 
 def update_question(question_id, data):
-    """Update a question via direct PATCH (service key bypasses RLS).
-    Updates raw_questions_he AND upserts into questions_he.
+    """
+    Update a question in the QUIZ DATABASE (uhfsfedwteeoxsvixvtr).
+    
+    This function performs TWO operations:
+    1. PATCH raw_questions_he — updates the source table with refined content
+    2. POST/PATCH questions_he — upserts the refined question into production table
+    
+    Service key bypasses RLS on both tables.
     """
     headers = {
         "apikey": SUPABASE_KEY,

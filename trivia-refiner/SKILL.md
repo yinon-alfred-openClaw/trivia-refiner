@@ -5,6 +5,11 @@ description: "Refine trivia questions by rephrasing with Gemini Flash, reviewing
 
 # Trivia Refiner
 
+**🎯 DATABASE: Quiz Supabase (`uhfsfedwteeoxsvixvtr`)**  
+This skill operates on **Yinon's Quiz Database**, NOT Alfred's personal Supabase instance.
+- `raw_questions_he` — source table with all scraped questions (read & update)
+- `questions_he` — production table with refined questions only (auto-upserted on approval)
+
 Fetch 10 questions, process them silently in the background, then show one clean before/after comparison message. User approves → submit to database.
 
 ## Quick Start
@@ -158,44 +163,62 @@ Supports `--dry-run` flag for testing.
 
 ## Credentials
 
+**⚠️ IMPORTANT:** This skill reads from **Yinon's Quiz Database** credentials, NOT Alfred's personal database.
+
 Reads from: `~/.openclaw/workspace/memory/supabase-creds.json`
 
 ```json
 {
-  "url": "https://xxxx.supabase.co",
-  "key": "sb_secret_xxxxx"
+  "url": "https://uhfsfedwteeoxsvixvtr.supabase.co",  ← QUIZ DB
+  "key": "sb_secret_...",  ← QUIZ DB
+  "project_ref": "uhfsfedwteeoxsvixvtr"
 }
 ```
+
+This is **separate** from Alfred's personal Supabase (`vstxlvhjopritumtxekd`).
 
 ---
 
 ## Database Schema
 
+**All tables in Quiz Supabase (`uhfsfedwteeoxsvixvtr`):**
+
 ```
-raw_questions_he table (source — read & fetch from here):
+raw_questions_he (source table — all scraped questions):
   id            int (PK)
   Category      text (original category string — keep unchanged)
-  Question      text ← update
-  Option 1-4    text ← update
+  Question      text ← updated during refinement
+  Option 1-4    text ← updated during refinement
   Correct Answer text ← keep unchanged (update only if question inverted)
-  category_id   int (FK → trivia_categories) ← update
-  difficulty    text (easy/medium/hard) ← update
+  category_id   int (FK → trivia_categories) ← assigned during refinement
+  difficulty    text (easy/medium/hard) ← assigned during refinement
 
-questions_he table (production — write ONLY via update_question RPC):
-  Same schema. Direct writes blocked by RLS.
-  Only questions approved through the pipeline live here.
+questions_he (production table — refined questions only):
+  id            int (PK) — matches raw_questions_he.id
+  Category      text
+  Question      text
+  Option 1-4    text
+  Correct Answer text
+  category_id   int
+  difficulty    text
+  
+  IMPORTANT: This table ONLY contains questions that have been refined and approved.
+  When submit_changes.py updates a question in raw_questions_he,
+  it AUTOMATICALLY upserts that refined question into questions_he.
 
-trivia_categories (via get_all_categories RPC):
+trivia_categories (reference table):
   id    int (PK)
   name  text (Hebrew)
 ```
 
 ### API Endpoints
-- **Fetch questions:** `GET /rest/v1/raw_questions_he`
+
+- **Fetch questions:** `GET /rest/v1/raw_questions_he?id=gt.{last_id}&limit=10`
 - **Fetch categories:** `POST /rest/v1/rpc/get_all_categories`
-- **Submit approved batch:** `POST /rest/v1/rpc/update_question`
-  - Params: `p_id`, `p_question`, `p_option_1`–`p_option_4`, `p_correct_answer`, `p_category_id`, `p_difficulty`
-  - Atomically updates `raw_questions_he` + upserts into `questions_he`
+- **Submit approved batch:** Direct REST API PATCH + POST
+  - PATCH `raw_questions_he?id=eq.{question_id}` — updates source
+  - POST `questions_he` — inserts refined question (auto-handled by submit_changes.py)
+  - If question already in questions_he, PATCH it instead
 
 ---
 
