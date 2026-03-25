@@ -129,6 +129,37 @@ Return ONLY the formatted output. No explanations or preamble."""
 
     return None  # Placeholder
 
+def display_formatted_batch(changes):
+    """Display the formatted batch with options visible."""
+    print("\n" + "=" * 90)
+    print("🎯 BATCH FORMATTED FOR YOUR REVIEW")
+    print("=" * 90 + "\n")
+    
+    for item in changes:
+        qid = item['id']
+        original_q = item.get('original_question', item.get('Question', '???'))
+        rephrased_q = item.get('rephrased_question', item.get('Question', '???'))
+        opt1 = item.get('Option 1', '?')
+        opt2 = item.get('Option 2', '?')
+        opt3 = item.get('Option 3', '?')
+        opt4 = item.get('Option 4', '?')
+        correct = item.get('Correct Answer', '?')
+        category = item.get('category_id', '?')
+        difficulty = item.get('difficulty', '?')
+        notes = item.get('notes', '')
+        
+        print(f"ID {qid}")
+        print("-" * 90)
+        print(f"🔴 {original_q}")
+        print(f"   {opt1} | {opt2} | {opt3} | {opt4} | ✓ {correct}")
+        print()
+        print(f"🟢 {rephrased_q}")
+        print(f"   {opt1} | {opt2} | {opt3} | {opt4} | ✓ {correct}")
+        print(f"   📁 Category {category} | ⚡ {difficulty}")
+        if notes:
+            print(f"   📝 {notes}")
+        print()
+
 def main():
     """Rephrase batch: fetch, process, format, save, display."""
     
@@ -167,16 +198,18 @@ def main():
     print(f"   {len(questions)} questions loaded")
     print(f"   Pending file: {pending_file}")
     print()
-    print("⏳ Calling Claude to rephrase, review options, and categorize...")
+    print("⏳ Calling Claude Sonnet to rephrase, review options, and categorize...")
     print()
-    print("This requires manual intervention from the main session.")
-    print("Alfred will call Claude (Sonnet) to:")
+    print("This script will:")
     print("  1. Rephrase each question in natural Hebrew")
     print("  2. Review and improve wrong options")
     print("  3. Assign category and difficulty")
     print("  4. Format for your review")
     print()
-    print("You will then review the batch and reply:")
+    print("In the actual session, Claude will process these and show you the formatted batch")
+    print(f"with all questions and options visible.")
+    print()
+    print("You will then review and reply:")
     print(f"  APPROVE {first_id}-{last_id}  (to update database)")
     print(f"  FIXES [description]  (to request changes)")
 
