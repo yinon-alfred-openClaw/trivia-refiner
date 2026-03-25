@@ -1,174 +1,271 @@
 ---
 name: trivia-refiner
-description: "Refine trivia questions by rephrasing with Gemini Flash, reviewing with Sonnet, assigning categories and difficulty levels, and submitting approved changes directly to the Supabase database. Use when you need to: (1) Process a batch of 10 trivia questions at once, (2) Improve Hebrew phrasing and option quality, (3) Auto-categorize questions and assess difficulty, (4) Review all changes before submission, (5) Update questions in the questions database."
+description: "Refine trivia questions in 3-step workflow: (1) Fetch batch → wait for PROCEED approval, (2) Process & format → wait for APPROVE approval, (3) Submit to database. Rephrases Hebrew questions, reviews options, assigns categories and difficulty. All database writes require explicit user approval."
 ---
 
-# Trivia Refiner
+# Trivia Refiner — 3-Step Approval Workflow
 
 **🎯 DATABASE: Quiz Supabase (`uhfsfedwteeoxsvixvtr`)**  
 This skill operates on **Yinon's Quiz Database**, NOT Alfred's personal Supabase instance.
-- `raw_questions_he` — source table with all scraped questions (read & update)
-- `questions_he` — production table with refined questions only (auto-upserted on approval)
+- `raw_questions_he` — source table with all scraped questions
+- `questions_he` — production table with refined questions only
 
-Fetch 10 questions, process them silently in the background, then show one clean before/after comparison message. User approves → submit to database.
+**⚠️ CRITICAL:** No changes to the database happen without explicit user approval at TWO checkpoints.
 
-## Quick Start
+## The Workflow (3 Steps)
+
+### **Step 1: FETCH (Automatic via cron)**
 
 ```bash
-python3 skills/trivia-refiner/scripts/refine_questions.py
+0 12 * * 0-5 python3 scripts/run_batch.py
 ```
 
-Then spawn subagents (see below), compile results, present ONE message to user.
+**What happens:**
+- Fetches next 10 unprocessed questions from Quiz DB
+- Displays them raw (no processing)
+- Asks: "Ready to process? Reply: PROCEED X-Y"
+- **STOPS and waits**
+
+**Script:** `scripts/run_batch.py`
+- Read-only (no modifications)
+- Exits after asking for approval
 
 ---
 
-## Workflow
+### **Step 2: PROCESS & FORMAT (Triggered by "PROCEED X-Y")**
 
-### Step 1 — Fetch
-
-Run `scripts/refine_questions.py` — it reads the last processed ID from tracking and fetches the next 10 questions. **Do not show output to the user.**
-
-### Step 2 — Process (silent, background)
-
-Spawn a **single Gemini Flash subagent** for ALL 10 questions at once:
-
-- **MANDATORY:** Rephrase every question in natural Hebrew
-- **MANDATORY:** Review every wrong option individually — replace if too specific (see Option Rules below)
-- Keep the correct answer unchanged (unless the question structure inverts — see Step 3)
-- All text must be **Hebrew only** — no English, no parentheses with translations
-
-**Option Rules:**
-- **REPLACE** if the option is too specific: unique proper nouns, specific song titles, specific person names, niche references that could only come from a copyrighted quiz source
-- **KEEP** if the option is generic enough: common city names, sport names, general concepts, well-known public figures already in the question context
-- When replacing, use a plausible alternative of the same type (e.g. song title → different song title, name → different name in the same field)
-- **NEVER** replace a wrong option with the correct answer, even partially
-- Add a 📝 note for every option changed: "אופציה שונתה: [old] → [new]"
-
-Prompt format (send all 10 in one call):
-
-```
-For each question:
-1. Rephrase the question (mandatory)
-2. Keep correct answer the same
-3. Optionally improve weak wrong options
-
-Return format:
-ID:N
-NEW_Q: [rephrased question]
-OPT1: [option]
-OPT2: [option]
-OPT3: [option]
-OPT4: [option]
-CORRECT: [correct answer]
-
-If question data is corrupted: write "SKIP" under the ID.
-```
-
-### Step 3 — Categorize & Review (silent, background)
-
-Spawn a **single Sonnet subagent** for all valid questions at once:
-
-- Assign the best category ID from `trivia_categories`
-- Assign difficulty: easy / medium / hard
-
-Return format:
-```
-ID:N | CAT:XX | DIFF:easy
-```
-
-### Step 4 — Detect Issues (silent, internal)
-
-Before presenting to user, check each question for:
-
-- **Corrupted data** — question text makes no sense (e.g. contains ingredient names instead of a question). Mark as ⚠️ SKIP.
-- **Inverted question** — Gemini rephrased the question in a way that the original correct answer no longer appears in the options (meaning the question structure flipped). Flag this explicitly so Alfred can decide whether to update the Correct Answer field too or skip.
-
-### Step 5 — Present ONE message to user
-
-Format ALL questions into a single clean message. Show old vs new side by side. Include the correct answer. Flag any issues. Do NOT send intermediate messages.
+When you reply `PROCEED 193-202`, Alfred's session:
+1. Calls `scripts/process_batch.py 193-202`
+2. Processes questions (rephrase + options review)
+3. Categorizes (assigns category_id + difficulty)
+4. Formats into comparison template
+5. Displays to Telegram
 
 **Template:**
-
 ```
-ID:1
-🔴 [original question]
-[opt1] | [opt2] | [opt3] | [opt4] | ✓ [correct answer]
-🟢 [rephrased question]
-[opt1] | [opt2] | [opt3] | [opt4] | ✓ [correct answer]
-📁 [category_id] | ⚡ [difficulty]
-
----
-
-ID:2
-🔴 ...
-🟢 ...
-📁 ... | ⚡ ...
-
----
-
-ID:5 — ⚠️ דילוג — שאלה פגומה בבסיס הנתונים
-
----
-
-ID:9 — ⚠️ שאלה הופכה — התשובה הנכונה השתנתה. הוגשה עם תשובה מעודכנת: [new correct answer]
-
----
-
-האם לאשר ולשלוח את השינויים לבסיס הנתונים? ✅ / ❌
+ID 193
+🔴 באיזה ענף ספורט אולימפי ישראל זכתה במדליית זהב ראשונה?
+אתלטיקה | טניס | התעמלות אומנותית ✓ | כדורסל
+🟢 באיזה ענף ספורט אולימפי קיבלה ישראל את מדליית הזהב הראשונה?
+התעמלות מודרנית | התעמלות אומנותית ✓ | שחיה | טניס
+📁 ספורט (21) | ⚡ medium
 ```
 
-### Step 6 — Submit on approval
-
-If user approves:
-1. Write all changes to `/tmp/trivia_changes.json`
-2. Run `scripts/submit_changes.py /tmp/trivia_changes.json`
-3. For inverted questions where Correct Answer changed — submit via direct PATCH (not through submit_changes.py, which preserves the original Correct Answer)
-4. Tracking file updates automatically after each successful submission
+**Script:** `scripts/process_batch.py`
+- Takes range: `193-202`
+- Fetches, processes, formats
+- Saves to memory (NOT database)
+- **STOPS and waits for approval**
 
 ---
 
-## Key Rules
+### **Step 3: SUBMIT (Triggered by "APPROVE X-Y")**
 
-| Rule | Detail |
-|------|--------|
-| Rephrasing | MANDATORY for every question |
-| Option changes | MANDATORY review — replace specific ones, keep generic ones |
-| Language | Hebrew only — no English additions |
-| Correct Answer | Keep unchanged unless question structure inverts |
-| User messages | ONE message only (the comparison). Everything else is silent. |
-| Corrupted data | Flag as ⚠️ SKIP — do not submit |
-| Inverted questions | Flag clearly — submit with updated Correct Answer if user approved |
-| Fetch cursor | Reads last processed ID from tracking file — always fetches next 10 |
+When you reply `APPROVE 193-202`, Alfred's session:
+1. Calls `scripts/submit_batch.py 193-202`
+2. Validates all changes
+3. Submits to Quiz Database
+4. Updates both `raw_questions_he` and `questions_he`
+5. Confirms: "✅ Batch submitted"
+
+**Script:** `scripts/submit_batch.py`
+- Reads formatted changes from memory
+- Validates before submitting
+- Updates Quiz DB
+- Tracks in `trivia-refiner-processed.json`
+- Cleans up temporary files
 
 ---
 
-## Scripts
+## Processing Rules
 
-### `scripts/refine_questions.py`
-Fetches next 10 unprocessed questions using cursor-based pagination (`id > last_edited_id LIMIT 10`).
+### Rephrasing (Step 2)
 
-Returns: list of questions with all fields.
+- **MANDATORY:** Rephrase every question in natural Hebrew
+- Keep the question meaning identical
+- Improve clarity and phrasing
+- **Hebrew only** — no English, no translations
+- Keep correct answer unchanged (unless question structure inverts)
 
-### `scripts/submit_changes.py <changes.json>`
-Validates and submits changes. Tracks success/failure in `trivia-refiner-processed.json`.
+### Option Review (Step 2)
 
-Supports `--dry-run` flag for testing.
+Apply to every wrong option (non-correct answer):
 
-### `scripts/tracking.py`
-- `get_last_edited_id()` — returns highest processed ID (cursor for next fetch)
-- `add_processed_id(id, status, **meta)` — log a question result
-- `get_stats()` — show totals
+- **REPLACE** if too specific:
+  - Unique proper nouns (specific person names)
+  - Specific song/movie titles
+  - Niche references from copyrighted sources
+  - Specific historical events or dates
+
+- **KEEP** if generic enough:
+  - Common city names
+  - Sport names
+  - General concepts
+  - Well-known public figures already in context
+
+- **MANDATORY:** Change at least 1 wrong option per question, even if all seem generic
+- When replacing: use plausible alternative of same type (name → different name, city → different city)
+- **NEVER** replace with correct answer, even partially
+- Add 📝 note for each change: "אופציה שונתה: [old] → [new]"
+
+### Categorization (Step 2)
+
+- Assign the BEST matching category ID
+- Assign difficulty: easy / medium / hard
+- Both are mandatory fields
+
+### Special Cases
+
+**Corrupted data:**
+```
+ID:N
+STATUS: SKIP
+REASON: [explain — e.g. contains unrelated words, broken text]
+```
+
+**Inverted question** (rephrasing flips the question structure):
+```
+ID:N
+ORIGINAL: [original question]
+🔴 [original options] | ✓ [old correct answer]
+REPHRASED: [new question]
+🟢 [new options] | ✓ [NEW correct answer — different from original]
+NOTES: ⚠️ שאלה הופכה — התשובה הנכונה השתנתה
+```
+
+---
+
+## Scripts Reference
+
+### `run_batch.py` — Fetch (Step 1)
+
+**Purpose:** Fetch 10 questions, ask for approval, stop.
+
+**Usage:**
+```bash
+python3 scripts/run_batch.py
+```
+
+**Output:**
+- Lists 10 raw questions
+- Asks: "PROCEED X-Y or SKIP"
+- Exits
+
+**Key point:** Read-only, no processing, no database changes.
+
+---
+
+### `process_batch.py` — Process & Format (Step 2)
+
+**Purpose:** Rephrase, review options, categorize, format comparison.
+
+**Usage:**
+```bash
+python3 scripts/process_batch.py 193-202
+```
+
+**What it does:**
+1. Fetches questions 193-202 from Quiz DB
+2. Calls Claude to rephrase + review options
+3. Calls Claude to categorize + assign difficulty
+4. Formats into comparison template
+5. Saves to memory (not database)
+6. Displays to user
+
+**Output:** Formatted batch ready for approval, asks "APPROVE X-Y or EDIT"
+
+**Key point:** No database writes yet. Everything in memory.
+
+---
+
+### `submit_batch.py` — Submit (Step 3)
+
+**Purpose:** Validate and submit approved changes to database.
+
+**Usage:**
+```bash
+python3 scripts/submit_batch.py 193-202
+python3 scripts/submit_batch.py 193-202 --dry-run
+```
+
+**What it does:**
+1. Loads formatted batch from memory
+2. Validates all changes
+3. Submits to Quiz DB (PATCH raw_questions_he + POST questions_he)
+4. Updates tracking file
+5. Cleans up temporary files
+
+**Output:** Confirmation message with success/failure counts
+
+**Key point:** Only runs on explicit approval. All database writes are validated.
+
+---
+
+### `tracking.py` — Utility Module
+
+Tracks processed questions in `~/.openclaw/workspace/memory/trivia-refiner-processed.json`
+
+Functions:
+- `get_last_edited_id()` — returns highest processed ID (for cursor-based fetch)
+- `add_processed_id(id, status, **metadata)` — log a question
+- `get_processed_question_ids()` — set of refined question IDs
+- `has_been_refined(id)` — check if already processed
+- `get_stats()` — total/refined/failed counts
+
+---
+
+## Approval Flow (Detailed)
+
+```
+TIME 0: Cron runs run_batch.py at 12 PM
+├─ Fetches questions 193-202
+├─ Posts to Telegram: "📋 BATCH FETCHED — Ready? PROCEED 193-202"
+└─ WAITS (exits)
+
+TIME 1: You reply "PROCEED 193-202"
+├─ Alfred's session receives message
+├─ Calls: python3 process_batch.py 193-202
+├─ Shows formatted comparison
+├─ Posts to Telegram: "🎯 FORMATTED — Approve? APPROVE 193-202"
+└─ WAITS
+
+TIME 2: You reply "APPROVE 193-202"
+├─ Alfred's session receives message
+├─ Calls: python3 submit_batch.py 193-202
+├─ Submits to Quiz Database
+├─ Posts to Telegram: "✅ SUBMITTED — Batch 193-202 complete"
+└─ DONE
+
+If you reply "SKIP" or "EDIT" at any point:
+└─ Process stops, waits for next batch or further instructions
+```
+
+---
+
+## Critical Safety Rules
+
+| Rule | Why |
+|------|-----|
+| **Two approvals required** | Prevents accidental database writes |
+| **Fetch (Step 1) is read-only** | Can't modify database from cron |
+| **All changes validated before submit** | Catches schema errors early |
+| **Tracking persists across sessions** | Prevents duplicate processing |
+| **No auto-approval** | Alfred never assumes silence = approval |
+| **Memory files cleaned after submit** | No stale temporary data |
 
 ---
 
 ## Credentials
 
+**⚠️ IMPORTANT:** This skill uses **Yinon's Quiz Database**, NOT Alfred's personal database.
+
 Reads from: `~/.openclaw/workspace/memory/supabase-creds.json`
 
 ```json
 {
-  "url": "https://xxxx.supabase.co",
-  "key": "sb_secret_xxxxx"
+  "url": "https://uhfsfedwteeoxsvixvtr.supabase.co",
+  "key": "sb_secret_...",
+  "project_ref": "uhfsfedwteeoxsvixvtr"
 }
 ```
 
@@ -176,37 +273,73 @@ Reads from: `~/.openclaw/workspace/memory/supabase-creds.json`
 
 ## Database Schema
 
+**Quiz Supabase (`uhfsfedwteeoxsvixvtr`):**
+
 ```
-raw_questions_he table (source — read & fetch from here):
-  id            int (PK)
-  Category      text (original category string — keep unchanged)
-  Question      text ← update
-  Option 1-4    text ← update
-  Correct Answer text ← keep unchanged (update only if question inverted)
-  category_id   int (FK → trivia_categories) ← update
-  difficulty    text (easy/medium/hard) ← update
+raw_questions_he (source):
+  id              int (PK)
+  Category        text (original — not changed)
+  Question        text (updated during refinement)
+  Option 1-4      text (updated during refinement)
+  Correct Answer  text (kept unchanged unless inverted)
+  category_id     int (FK → trivia_categories, assigned during refinement)
+  difficulty      text (easy/medium/hard, assigned during refinement)
 
-questions_he table (production — write ONLY via update_question RPC):
-  Same schema. Direct writes blocked by RLS.
-  Only questions approved through the pipeline live here.
+questions_he (production — refined questions only):
+  id              int (PK, matches raw_questions_he.id)
+  Category        text
+  Question        text
+  Option 1-4      text
+  Correct Answer  text
+  category_id     int
+  difficulty      text
 
-trivia_categories (via get_all_categories RPC):
-  id    int (PK)
-  name  text (Hebrew)
+trivia_categories (reference):
+  id              int (PK)
+  name            text (Hebrew category name)
 ```
-
-### API Endpoints
-- **Fetch questions:** `GET /rest/v1/raw_questions_he`
-- **Fetch categories:** `POST /rest/v1/rpc/get_all_categories`
-- **Submit approved batch:** `POST /rest/v1/rpc/update_question`
-  - Params: `p_id`, `p_question`, `p_option_1`–`p_option_4`, `p_correct_answer`, `p_category_id`, `p_difficulty`
-  - Atomically updates `raw_questions_he` + upserts into `questions_he`
 
 ---
 
-## Subagent Models
+## Behavioral Rules for Alfred
 
-| Task | Model |
-|------|-------|
-| Rephrasing + option improvement | `google/gemini-2.5-flash` |
-| Categorization + difficulty | `sonnet` |
+When trivia-refiner messages appear in Telegram:
+
+1. **On "BATCH FETCHED" message:**
+   - Do NOT assume user wants processing
+   - Wait for explicit "PROCEED X-Y" reply
+
+2. **On "PROCEED X-Y" reply:**
+   - Call `process_batch.py X-Y` immediately
+   - Format and display comparison
+   - Wait for "APPROVE X-Y" reply
+
+3. **On "APPROVE X-Y" reply:**
+   - Call `submit_batch.py X-Y` immediately
+   - Confirm submission
+   - Done
+
+4. **On "SKIP" or "EDIT" reply:**
+   - Do not process further
+   - Wait for next instruction
+
+**NEVER assume silence = approval. ALWAYS wait for explicit commands.**
+
+---
+
+## Common Questions
+
+**Q: Can I skip a question in the batch?**
+A: Yes, reply "EDIT" when reviewing. The batch will be held for adjustment.
+
+**Q: What if a question inverts?**
+A: It's flagged in the formatted output. If you approve, the new correct answer is submitted.
+
+**Q: How do I undo a submission?**
+A: Manually edit the Quiz DB or request a rollback. Submissions are permanent.
+
+**Q: Can I process a batch manually?**
+A: Yes: `python3 process_batch.py 193-202` followed by `python3 submit_batch.py 193-202 --dry-run`
+
+**Q: What happens if submission fails?**
+A: Tracked in `trivia-refiner-processed.json` with error details. Retry manually or contact support.
