@@ -42,7 +42,7 @@ When you reply `REPHRASE X-Y`:
 4. **I format with template** and send to you for review
 5. **WAIT for your review**
 6. **You send back approval** with any fixes you want
-7. **Only then I update** the database using the update_questions function
+7. **Only then I update** the database using the update_question RPC function
 
 **This is the critical part: NO database write until you approve.**
 
@@ -122,7 +122,7 @@ or:
 **When you reply:** `APPROVE 203-212` (or `FIXES ...`)
 
 **If you reply APPROVE:**
-- I call the `update_questions` function
+- I call the `update_question` RPC function for each question
 - Database is updated with rephrased questions + categories + difficulty
 - Confirmation sent
 
@@ -199,8 +199,8 @@ python3 scripts/update_batch.py 203-212
 **What it does:**
 1. Loads formatted batch from memory
 2. Validates all changes
-3. Calls `update_questions` RPC function
-4. Updates raw_questions_he + questions_he
+3. Calls `update_question` RPC function for each question
+4. Updates raw_questions_he + questions_he (both tables)
 5. Updates tracking file
 6. Confirms to user
 
@@ -235,12 +235,12 @@ When trivia-refiner messages appear:
 
 ---
 
-## Database Function: `update_questions`
+## Database Function: `update_question`
 
-The RPC function that updates questions:
+The RPC function that updates a single question:
 
 ```sql
-update_questions(
+update_question(
   p_id integer,                 -- Question ID
   p_question text,               -- New question text
   p_option_1 text,               -- New option 1
@@ -253,11 +253,11 @@ update_questions(
 )
 ```
 
-This function atomically:
+This RPC function atomically:
 - Updates `raw_questions_he` (source table)
 - Upserts into `questions_he` (production table)
 
-**Called only by:** `update_batch.py` on explicit user approval
+**Called by:** `update_batch.py` on explicit user approval (once per question)
 
 ---
 

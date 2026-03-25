@@ -2,7 +2,7 @@
 """
 Trivia Refiner — Stage 3: UPDATE DATABASE
 Update database ONLY after user explicitly approves the formatted batch.
-Calls the update_questions RPC function in Quiz DB.
+Calls the update_question RPC function in Quiz DB (once per question).
 """
 
 import json
@@ -44,79 +44,45 @@ def validate_change(change):
 
 def update_question_in_db(question_id, data):
     """
-    Update question in Quiz Database using REST API.
-    PATCH raw_questions_he (source table)
-    POST/PATCH questions_he (production table)
+    Call update_question RPC function to update the database.
     This is the ONLY place database updates happen.
+    RPC function handles both raw_questions_he and questions_he atomically.
     """
     headers = {
         "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}",
-        "Content-Type": "application/json",
-        "Prefer": "return=representation"
+        "Content-Type": "application/json"
     }
     
-    # Build patch payload
-    patch_payload = {
-        "Question": data.get("Question"),
-        "Option 1": data.get("Option 1"),
-        "Option 2": data.get("Option 2"),
-        "Option 3": data.get("Option 3"),
-        "Option 4": data.get("Option 4"),
-        "Correct Answer": data.get("Correct Answer"),
-        "category_id": data.get("category_id"),
-        "difficulty": data.get("difficulty")
+    # Build RPC payload - use p_ prefix for parameters
+    payload = {
+        "p_id": question_id,
+        "p_question": data.get("Question"),
+        "p_option_1": data.get("Option 1"),
+        "p_option_2": data.get("Option 2"),
+        "p_option_3": data.get("Option 3"),
+        "p_option_4": data.get("Option 4"),
+        "p_correct_answer": data.get("Correct Answer"),
+        "p_category_id": data.get("category_id"),
+        "p_difficulty": data.get("difficulty")
     }
     
-    # 1. Update raw_questions_he
-    url = f"{SUPABASE_URL}/rest/v1/raw_questions_he?id=eq.{question_id}"
+    # Call the update_question RPC function
+    url = f"{SUPABASE_URL}/rest/v1/rpc/update_question"
     req = urllib.request.Request(
         url,
-        data=json.dumps(patch_payload).encode('utf-8'),
+        data=json.dumps(payload).encode('utf-8'),
         headers=headers,
-        method='PATCH'
+        method='POST'
     )
     
     try:
         with urllib.request.urlopen(req) as response:
-            result = json.loads(response.read().decode())
-            
-            # 2. Also upsert into questions_he
-            if result:
-                upsert_payload = {
-                    "id": question_id,
-                    **patch_payload
-                }
-                
-                upsert_url = f"{SUPABASE_URL}/rest/v1/questions_he"
-                upsert_req = urllib.request.Request(
-                    upsert_url,
-                    data=json.dumps(upsert_payload).encode('utf-8'),
-                    headers=headers,
-                    method='POST'
-                )
-                
-                # Try to insert; if already exists, update instead
-                try:
-                    with urllib.request.urlopen(upsert_req):
-                        pass  # Success - inserted
-                except urllib.error.HTTPError as e:
-                    if e.code == 409:
-                        # Row exists, update it
-                        upsert_req_patch = urllib.request.Request(
-                            f"{SUPABASE_URL}/rest/v1/questions_he?id=eq.{question_id}",
-                            data=json.dumps(patch_payload).encode('utf-8'),
-                            headers=headers,
-                            method='PATCH'
-                        )
-                        try:
-                            with urllib.request.urlopen(upsert_req_patch):
-                                pass  # Success - updated
-                        except:
-                            pass  # Non-critical; raw_questions_he was updated
-                    else:
-                        pass  # Non-critical; raw_questions_he was updated
-            
+            # RPC might return empty or minimal response
+            try:
+                result = json.loads(response.read().decode())
+            except:
+                result = {"status": "success"}
             return result
     except urllib.error.HTTPError as e:
         try:

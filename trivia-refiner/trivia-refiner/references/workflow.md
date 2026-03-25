@@ -81,7 +81,7 @@ new_opt1 | new_opt2 | new_opt3 | new_opt4 | ✓ [correct]
 **What happens:**
 1. Loads formatted batch from memory
 2. Validates all changes
-3. **Calls `update_questions` RPC function** for each question
+3. **Calls `update_question` RPC function** for each question
 4. RPC function atomically:
    - Updates `raw_questions_he` (source table)
    - Upserts into `questions_he` (production table)
@@ -94,13 +94,13 @@ new_opt1 | new_opt2 | new_opt3 | new_opt4 | ✓ [correct]
 
 ---
 
-## Database Function: `update_questions`
+## Database Function: `update_question`
 
 **Location:** Quiz Supabase (uhfsfedwteeoxsvixvtr)
 
 **Function signature:**
 ```sql
-update_questions(
+update_question(
   p_id integer,                 -- Question ID
   p_question text,               -- Question text (rephrased)
   p_option_1 text,               -- Option 1 (possibly changed)
@@ -120,7 +120,7 @@ update_questions(
 
 **Called by:** `scripts/update_batch.py` only, on explicit user approval
 
-**Called by:** Never called automatically, never called without approval
+**Constraints:** Never called automatically, never called without explicit user approval
 
 ---
 
