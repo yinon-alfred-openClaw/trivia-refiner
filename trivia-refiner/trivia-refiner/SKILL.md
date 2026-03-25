@@ -1,345 +1,316 @@
 ---
 name: trivia-refiner
-description: "Refine trivia questions in 3-step workflow: (1) Fetch batch → wait for PROCEED approval, (2) Process & format → wait for APPROVE approval, (3) Submit to database. Rephrases Hebrew questions, reviews options, assigns categories and difficulty. All database writes require explicit user approval."
+description: "Refine Hebrew trivia questions through a 2-stage workflow: (1) Fetch batch → User approves rephrasing, (2) Rephrase + format → User reviews + approves → Update database. Rephrases questions, reviews options, assigns categories and difficulty. Database is NEVER updated until user explicitly approves the formatted batch."
 ---
 
-# Trivia Refiner — 3-Step Approval Workflow
+# Trivia Refiner — User-Approved Workflow
 
-**🎯 DATABASE: Quiz Supabase (`uhfsfedwteeoxsvixvtr`)**  
-This skill operates on **Yinon's Quiz Database**, NOT Alfred's personal Supabase instance.
-- `raw_questions_he` — source table with all scraped questions
-- `questions_he` — production table with refined questions only
+**🎯 DATABASE: Quiz Supabase (`uhfsfedwteeoxsvixvtr`)**
 
-**⚠️ CRITICAL:** No changes to the database happen without explicit user approval at TWO checkpoints.
+This skill refines Hebrew trivia questions with strict user oversight. **No database changes happen without explicit user approval.**
 
-## The Workflow (3 Steps)
+---
 
-### **Step 1: FETCH (Automatic via cron)**
+## The Workflow
+
+### Stage 1: FETCH (Automatic via cron)
 
 ```bash
-0 12 * * 0-5 python3 scripts/run_batch.py
+0 12 * * 0-5 python3 scripts/fetch_batch.py
 ```
 
 **What happens:**
 - Fetches next 10 unprocessed questions from Quiz DB
-- Displays them raw (no processing)
-- Asks: "Ready to process? Reply: PROCEED X-Y"
+- Shows raw questions
+- Asks: "Ready to rephrase? Reply: REPHRASE X-Y"
 - **STOPS and waits**
 
-**Script:** `scripts/run_batch.py`
-- Read-only (no modifications)
-- Exits after asking for approval
+**What it does NOT do:**
+- No processing
+- No database changes
+- No assumptions
 
 ---
 
-### **Step 2: PROCESS & FORMAT (Triggered by "PROCEED X-Y")**
+### Stage 2: REPHRASE + REVIEW + UPDATE (Interactive)
 
-When you reply `PROCEED 193-202`, Alfred's session:
-1. Calls `scripts/process_batch.py 193-202`
-2. Processes questions (rephrase + options review)
-3. Categorizes (assigns category_id + difficulty)
-4. Formats into comparison template
-5. Displays to Telegram
+When you reply `REPHRASE X-Y`:
 
-**Template:**
-```
-ID 193
-🔴 באיזה ענף ספורט אולימפי ישראל זכתה במדליית זהב ראשונה?
-אתלטיקה | טניס | התעמלות אומנותית ✓ | כדורסל
-🟢 באיזה ענף ספורט אולימפי קיבלה ישראל את מדליית הזהב הראשונה?
-התעמלות מודרנית | התעמלות אומנותית ✓ | שחיה | טניס
-📁 ספורט (21) | ⚡ medium
-```
+1. **I rephrase** the questions (improve Hebrew phrasing, clarity)
+2. **I review options** (replace overly specific ones with plausible alternatives)
+3. **I assign categories & difficulty** (best match from available categories)
+4. **I format with template** and send to you for review
+5. **WAIT for your review**
+6. **You send back approval** with any fixes you want
+7. **Only then I update** the database using the update_questions function
 
-**Script:** `scripts/process_batch.py`
-- Takes range: `193-202`
-- Fetches, processes, formats
-- Saves to memory (NOT database)
-- **STOPS and waits for approval**
+**This is the critical part: NO database write until you approve.**
 
 ---
 
-### **Step 3: SUBMIT (Triggered by "APPROVE X-Y")**
+## Step-by-Step Detail
 
-When you reply `APPROVE 193-202`, Alfred's session:
-1. Calls `scripts/submit_batch.py 193-202`
-2. Validates all changes
-3. Submits to Quiz Database
-4. Updates both `raw_questions_he` and `questions_he`
-5. Confirms: "✅ Batch submitted"
+### Fetch Stage
 
-**Script:** `scripts/submit_batch.py`
-- Reads formatted changes from memory
-- Validates before submitting
-- Updates Quiz DB
-- Tracks in `trivia-refiner-processed.json`
-- Cleans up temporary files
+**Script:** `scripts/fetch_batch.py`
+- Reads last processed ID from tracking
+- Fetches next 10 raw questions
+- Prints them for user review
+- Exits and waits
 
----
-
-## Processing Rules
-
-### Rephrasing (Step 2)
-
-- **MANDATORY:** Rephrase every question in natural Hebrew
-- Keep the question meaning identical
-- Improve clarity and phrasing
-- **Hebrew only** — no English, no translations
-- Keep correct answer unchanged (unless question structure inverts)
-
-### Option Review (Step 2)
-
-Apply to every wrong option (non-correct answer):
-
-- **REPLACE** if too specific:
-  - Unique proper nouns (specific person names)
-  - Specific song/movie titles
-  - Niche references from copyrighted sources
-  - Specific historical events or dates
-
-- **KEEP** if generic enough:
-  - Common city names
-  - Sport names
-  - General concepts
-  - Well-known public figures already in context
-
-- **MANDATORY:** Change at least 1 wrong option per question, even if all seem generic
-- When replacing: use plausible alternative of same type (name → different name, city → different city)
-- **NEVER** replace with correct answer, even partially
-- Add 📝 note for each change: "אופציה שונתה: [old] → [new]"
-
-### Categorization (Step 2)
-
-- Assign the BEST matching category ID
-- Assign difficulty: easy / medium / hard
-- Both are mandatory fields
-
-### Special Cases
-
-**Corrupted data:**
+Example output:
 ```
-ID:N
-STATUS: SKIP
-REASON: [explain — e.g. contains unrelated words, broken text]
-```
+📋 BATCH FETCHED — 10 questions (IDs 203–212)
 
-**Inverted question** (rephrasing flips the question structure):
-```
-ID:N
-ORIGINAL: [original question]
-🔴 [original options] | ✓ [old correct answer]
-REPHRASED: [new question]
-🟢 [new options] | ✓ [NEW correct answer — different from original]
-NOTES: ⚠️ שאלה הופכה — התשובה הנכונה השתנתה
+ID 203 | Hebrew question text...
+ID 204 | Hebrew question text...
+...
+
+⏸️ Ready to rephrase? Reply:
+   REPHRASE 203-212
 ```
 
 ---
 
-## Scripts Reference
+### Rephrase + Review Stage
 
-### `run_batch.py` — Fetch (Step 1)
+**When you reply:** `REPHRASE 203-212`
 
-**Purpose:** Fetch 10 questions, ask for approval, stop.
+**What I do:**
+
+1. **Fetch questions 203-212** from Quiz DB
+2. **Rephrase each question** in natural Hebrew
+   - Keep question meaning identical
+   - Improve phrasing for clarity
+   - Hebrew only (no English, no translations)
+3. **Review wrong options**
+   - REPLACE if too specific (unique names, niche references, copyrighted content)
+   - KEEP if generic (common cities, well-known figures, general concepts)
+   - MANDATORY: Change at least 1 wrong option per question
+   - When replacing: use plausible alternative of same type
+   - NEVER replace with correct answer
+4. **Assign category & difficulty**
+   - Best matching category ID
+   - Difficulty: easy/medium/hard
+5. **Format with template**
+6. **Send to you for review**
+
+**Template format:**
+```
+ID 203
+🔴 [original question]
+[opt1] | [opt2] | [opt3] | [opt4] | ✓ [correct answer]
+
+🟢 [rephrased question]
+[opt1] | [opt2] | [opt3] | [opt4] | ✓ [correct answer]
+📁 Category (ID) | ⚡ difficulty
+
+---
+
+[repeat for all 10 questions]
+
+⏸️ Ready to update? Review above, then reply:
+   APPROVE 203-212
+or:
+   FIXES [describe changes needed]
+```
+
+---
+
+### Your Review + Approval
+
+**When you reply:** `APPROVE 203-212` (or `FIXES ...`)
+
+**If you reply APPROVE:**
+- I call the `update_questions` function
+- Database is updated with rephrased questions + categories + difficulty
+- Confirmation sent
+
+**If you reply FIXES:**
+- Tell me what needs changing
+- I adjust and resend the formatted batch
+- Wait for your next reply
+
+---
+
+## Critical Rules
+
+| Rule | Why |
+|------|-----|
+| **Never update DB without user approval** | Prevents accidental changes to production |
+| **Always format for review first** | User sees exactly what will be changed |
+| **Wait for explicit "APPROVE" or "FIXES"** | No assumptions about user intent |
+| **Both rephrasing & review happen before sending** | User sees the finished product, not the work-in-progress |
+| **Track all changes** | Maintain history in tracking file |
+
+---
+
+## Scripts
+
+### `fetch_batch.py`
+
+**Purpose:** Fetch next 10 questions, ask for rephrase approval.
 
 **Usage:**
 ```bash
-python3 scripts/run_batch.py
+python3 scripts/fetch_batch.py
 ```
 
 **Output:**
 - Lists 10 raw questions
-- Asks: "PROCEED X-Y or SKIP"
+- Asks: "REPHRASE X-Y"
 - Exits
 
-**Key point:** Read-only, no processing, no database changes.
+**Safety:** Read-only (safe for cron)
 
 ---
 
-### `process_batch.py` — Process & Format (Step 2)
+### `rephrase_batch.py`
 
-**Purpose:** Rephrase, review options, categorize, format comparison.
+**Purpose:** Rephrase + format batch for user review.
 
 **Usage:**
 ```bash
-python3 scripts/process_batch.py 193-202
+python3 scripts/rephrase_batch.py 203-212
 ```
 
 **What it does:**
-1. Fetches questions 193-202 from Quiz DB
+1. Fetches questions 203-212
 2. Calls Claude to rephrase + review options
 3. Calls Claude to categorize + assign difficulty
-4. Formats into comparison template
-5. Saves to memory (not database)
-6. Displays to user
+4. Formats with template
+5. Saves to memory (NOT database)
+6. Displays formatted batch
+7. Asks: "APPROVE 203-212 or FIXES ..."
 
-**Output:** Formatted batch ready for approval, asks "APPROVE X-Y or EDIT"
-
-**Key point:** No database writes yet. Everything in memory.
+**Safety:** No database writes
 
 ---
 
-### `submit_batch.py` — Submit (Step 3)
+### `update_batch.py`
 
-**Purpose:** Validate and submit approved changes to database.
+**Purpose:** Update database ONLY after user approval.
 
 **Usage:**
 ```bash
-python3 scripts/submit_batch.py 193-202
-python3 scripts/submit_batch.py 193-202 --dry-run
+python3 scripts/update_batch.py 203-212
 ```
 
 **What it does:**
 1. Loads formatted batch from memory
 2. Validates all changes
-3. Submits to Quiz DB (PATCH raw_questions_he + POST questions_he)
-4. Updates tracking file
-5. Cleans up temporary files
+3. Calls `update_questions` RPC function
+4. Updates raw_questions_he + questions_he
+5. Updates tracking file
+6. Confirms to user
 
-**Output:** Confirmation message with success/failure counts
-
-**Key point:** Only runs on explicit approval. All database writes are validated.
-
----
-
-### `tracking.py` — Utility Module
-
-Tracks processed questions in `~/.openclaw/workspace/memory/trivia-refiner-processed.json`
-
-Functions:
-- `get_last_edited_id()` — returns highest processed ID (for cursor-based fetch)
-- `add_processed_id(id, status, **metadata)` — log a question
-- `get_processed_question_ids()` — set of refined question IDs
-- `has_been_refined(id)` — check if already processed
-- `get_stats()` — total/refined/failed counts
-
----
-
-## Approval Flow (Detailed)
-
-```
-TIME 0: Cron runs run_batch.py at 12 PM
-├─ Fetches questions 193-202
-├─ Posts to Telegram: "📋 BATCH FETCHED — Ready? PROCEED 193-202"
-└─ WAITS (exits)
-
-TIME 1: You reply "PROCEED 193-202"
-├─ Alfred's session receives message
-├─ Calls: python3 process_batch.py 193-202
-├─ Shows formatted comparison
-├─ Posts to Telegram: "🎯 FORMATTED — Approve? APPROVE 193-202"
-└─ WAITS
-
-TIME 2: You reply "APPROVE 193-202"
-├─ Alfred's session receives message
-├─ Calls: python3 submit_batch.py 193-202
-├─ Submits to Quiz Database
-├─ Posts to Telegram: "✅ SUBMITTED — Batch 193-202 complete"
-└─ DONE
-
-If you reply "SKIP" or "EDIT" at any point:
-└─ Process stops, waits for next batch or further instructions
-```
-
----
-
-## Critical Safety Rules
-
-| Rule | Why |
-|------|-----|
-| **Two approvals required** | Prevents accidental database writes |
-| **Fetch (Step 1) is read-only** | Can't modify database from cron |
-| **All changes validated before submit** | Catches schema errors early |
-| **Tracking persists across sessions** | Prevents duplicate processing |
-| **No auto-approval** | Alfred never assumes silence = approval |
-| **Memory files cleaned after submit** | No stale temporary data |
-
----
-
-## Credentials
-
-**⚠️ IMPORTANT:** This skill uses **Yinon's Quiz Database**, NOT Alfred's personal database.
-
-Reads from: `~/.openclaw/workspace/memory/supabase-creds.json`
-
-```json
-{
-  "url": "https://uhfsfedwteeoxsvixvtr.supabase.co",
-  "key": "sb_secret_...",
-  "project_ref": "uhfsfedwteeoxsvixvtr"
-}
-```
-
----
-
-## Database Schema
-
-**Quiz Supabase (`uhfsfedwteeoxsvixvtr`):**
-
-```
-raw_questions_he (source):
-  id              int (PK)
-  Category        text (original — not changed)
-  Question        text (updated during refinement)
-  Option 1-4      text (updated during refinement)
-  Correct Answer  text (kept unchanged unless inverted)
-  category_id     int (FK → trivia_categories, assigned during refinement)
-  difficulty      text (easy/medium/hard, assigned during refinement)
-
-questions_he (production — refined questions only):
-  id              int (PK, matches raw_questions_he.id)
-  Category        text
-  Question        text
-  Option 1-4      text
-  Correct Answer  text
-  category_id     int
-  difficulty      text
-
-trivia_categories (reference):
-  id              int (PK)
-  name            text (Hebrew category name)
-```
+**Safety:** Only runs on explicit "APPROVE" command
 
 ---
 
 ## Behavioral Rules for Alfred
 
-When trivia-refiner messages appear in Telegram:
+When trivia-refiner messages appear:
 
-1. **On "BATCH FETCHED" message:**
-   - Do NOT assume user wants processing
-   - Wait for explicit "PROCEED X-Y" reply
+1. **On FETCH message:**
+   - Show raw questions
+   - Do NOT rephrase automatically
+   - Wait for "REPHRASE X-Y"
 
-2. **On "PROCEED X-Y" reply:**
-   - Call `process_batch.py X-Y` immediately
+2. **On "REPHRASE X-Y" reply:**
+   - Call rephrase_batch.py X-Y
    - Format and display comparison
-   - Wait for "APPROVE X-Y" reply
+   - Wait for "APPROVE X-Y" or "FIXES ..."
 
 3. **On "APPROVE X-Y" reply:**
-   - Call `submit_batch.py X-Y` immediately
-   - Confirm submission
-   - Done
+   - Call update_batch.py X-Y
+   - Confirm update
 
-4. **On "SKIP" or "EDIT" reply:**
-   - Do not process further
-   - Wait for next instruction
+4. **On "FIXES ..." reply:**
+   - Adjust as requested
+   - Resend formatted batch
+   - Wait for next reply
 
-**NEVER assume silence = approval. ALWAYS wait for explicit commands.**
+**CRITICAL: Never process without explicit user command at each step.**
 
 ---
 
-## Common Questions
+## Database Function: `update_questions`
 
-**Q: Can I skip a question in the batch?**
-A: Yes, reply "EDIT" when reviewing. The batch will be held for adjustment.
+The RPC function that updates questions:
 
-**Q: What if a question inverts?**
-A: It's flagged in the formatted output. If you approve, the new correct answer is submitted.
+```sql
+update_questions(
+  p_id integer,                 -- Question ID
+  p_question text,               -- New question text
+  p_option_1 text,               -- New option 1
+  p_option_2 text,               -- New option 2
+  p_option_3 text,               -- New option 3
+  p_option_4 text,               -- New option 4
+  p_correct_answer text,         -- Correct answer (unchanged unless inverted)
+  p_category_id integer,         -- Category ID
+  p_difficulty text              -- Difficulty (easy/medium/hard)
+)
+```
 
-**Q: How do I undo a submission?**
-A: Manually edit the Quiz DB or request a rollback. Submissions are permanent.
+This function atomically:
+- Updates `raw_questions_he` (source table)
+- Upserts into `questions_he` (production table)
 
-**Q: Can I process a batch manually?**
-A: Yes: `python3 process_batch.py 193-202` followed by `python3 submit_batch.py 193-202 --dry-run`
+**Called only by:** `update_batch.py` on explicit user approval
 
-**Q: What happens if submission fails?**
-A: Tracked in `trivia-refiner-processed.json` with error details. Retry manually or contact support.
+---
+
+## Example: Full Flow
+
+```
+[CRON: 12 PM]
+fetch_batch.py
+→ Telegram: "📋 BATCH 1 (IDs 193-202) fetched. Ready? REPHRASE 193-202"
+
+[YOU]: "REPHRASE 193-202"
+
+[ALFRED]:
+rephrase_batch.py 193-202
+→ Telegram: "[Formatted batch with old vs new]"
+→ Telegram: "Ready to update? APPROVE 193-202 or FIXES ..."
+
+[YOU]: "APPROVE 193-202"
+
+[ALFRED]:
+update_batch.py 193-202
+→ Updates database
+→ Telegram: "✅ Batch 193-202 updated in database"
+```
+
+---
+
+## Troubleshooting
+
+**Q: I want to change something before updating**
+A: Reply "FIXES [description]". I'll adjust and show you again.
+
+**Q: Can I skip a batch?**
+A: Yes, reply "SKIP". Next batch will fetch later.
+
+**Q: What if rephrasing is wrong?**
+A: Tell me in "FIXES" reply. I'll adjust before we update the database.
+
+**Q: When is the database updated?**
+A: Only after you reply "APPROVE X-Y". Not before.
+
+---
+
+## Tracking
+
+All processed questions tracked in:
+```
+~/.openclaw/workspace/memory/trivia-refiner-processed.json
+```
+
+Stores:
+- Question ID
+- Status: pending, formatted, approved, updated, failed
+- Metadata: category_id, difficulty
+
+Used to prevent duplicate processing and track progress.
