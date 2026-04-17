@@ -23,7 +23,6 @@ except Exception as e:
     sys.exit(1)
 
 TRACKING_FILE = os.path.expanduser("~/.openclaw/workspace/memory/trivia-refiner-processed.json")
-MAX_BATCHES = 10
 
 def load_tracking():
     if not os.path.exists(TRACKING_FILE):
@@ -43,6 +42,7 @@ def get_batch_count():
 def increment_batch_count():
     data = load_tracking()
     data["batch_count"] = data.get("batch_count", 0) + 1
+    data["last_updated"] = __import__('datetime').datetime.utcnow().isoformat() + 'Z'
     with open(TRACKING_FILE, "w") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
@@ -146,9 +146,6 @@ def call_sonnet(prompt):
 
 def main():
     batch_count = get_batch_count()
-    if batch_count >= MAX_BATCHES:
-        print("✅ כל 10 הבאצ'ים הושלמו. הסקריפט יופסק.")
-        return
 
     last_id = get_last_edited_id()
     questions = fetch_questions(last_id)
@@ -160,7 +157,7 @@ def main():
     prompt = build_orchestrator_prompt(questions, categories)
     
     # Output the prompt for Alfred to process directly in the session
-    print(f"📋 **בצ'ים {batch_count + 1}/10 — {len(questions)} שאלות | IDs {questions[0]['id']}–{questions[-1]['id']}**")
+    print(f"📋 **בצ'ים {batch_count + 1} — {len(questions)} שאלות | IDs {questions[0]['id']}–{questions[-1]['id']}**")
     print()
     print("Alfred — process the following questions using the rules below:")
     print()

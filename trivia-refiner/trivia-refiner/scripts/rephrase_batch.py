@@ -87,13 +87,26 @@ CORRECT: {q.get('Correct Answer', '')}
 
     return f"""You are rephrasing Hebrew trivia questions. Perform these tasks:
 
-TASK 1: REPHRASE each question
-  • Keep the question meaning identical
-  • Improve Hebrew phrasing for clarity
+TASK 1: CHECK FOR DAMAGED QUESTIONS
+  • If the "ORIGINAL" field is empty or missing, and only options exist:
+    - Try to infer the real question from the options and correct answer
+    - If you can reconstruct a sensible question, use it
+    - If you CANNOT understand what the question should be, mark as [DAMAGED] and skip
+  • A damaged question will appear as: "DAMAGED: [reason] — skipping this question"
+
+TASK 2: REPHRASE each question
+  • Keep the question meaning IDENTICAL — do NOT add any information that wasn't in the original
+  • Rephrase ONLY to improve Hebrew clarity and natural flow
+  • DO NOT add dates, years, names, or facts not explicitly in the original question
+  • Example of what NOT to do:
+    ❌ Original: "איך קראו לחברת התקליטים שהקימה להקת הביטלס?"
+    ❌ Wrong rephrase: "איזו חברת תקליטים הקימה הביטלס בשנת 1968?" (added year 1968)
+  • Example of what TO do:
+    ✅ Better rephrase: "איזו חברת תקליטים הקימו הביטלס?" (same meaning, better Hebrew)
   • Use natural, conversational Hebrew
   • Hebrew only — no English, no translations
 
-TASK 2: REVIEW wrong options
+TASK 3: REVIEW wrong options
   • For each wrong option (not the correct answer):
     - REPLACE if too specific: unique names, niche references, copyrighted content
     - KEEP if generic: common cities, well-known figures, general concepts
@@ -102,13 +115,13 @@ TASK 2: REVIEW wrong options
   • NEVER replace with the correct answer
   • Add note: "אופציה שונתה: [old] → [new]" for each change
 
-TASK 3: CATEGORIZE and assess difficulty
+TASK 4: CATEGORIZE and assess difficulty
   • Assign best matching category ID from: {cat_list}
   • Assign difficulty: easy, medium, or hard
 
-TASK 4: FORMAT output (THIS IS THE ONLY THING YOU RETURN)
+TASK 5: FORMAT output (THIS IS THE ONLY THING YOU RETURN)
 
-For each question, return:
+For each valid question, return:
 
 ID:N
 ORIGINAL: [original question text]
@@ -122,12 +135,17 @@ NOTES: [any changes made]
 
 ---
 
+For damaged questions, return:
+
+ID:N
+DAMAGED: [reason explaining why you cannot infer the question]
+
+---
+
 QUESTIONS TO PROCESS:
 {q_text}
 
 Return ONLY the formatted output. No explanations or preamble."""
-
-    return None  # Placeholder
 
 def display_formatted_batch(changes):
     """Display the formatted batch with options visible."""
