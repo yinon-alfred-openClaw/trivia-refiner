@@ -2,16 +2,20 @@
 """
 Submit approved question changes to the QUIZ SUPABASE DATABASE (uhfsfedwteeoxsvixvtr).
 
-IMPORTANT: This script updates TWO tables:
-  1. raw_questions_he — the source table with all scraped questions
-  2. questions_he — the production table (auto-upserted with refined questions only)
+This script calls the `update_question` RPC function, which is responsible for
+updating both the raw table and the final questions table for the selected
+language.
 
-Expects a JSON file with the changes to be applied.
+Default language: Hebrew (`he`)
+Optional language: English (`en`) via `--lang en`
+
 Credentials loaded from ~/.openclaw/workspace/memory/supabase-creds.json (Quiz DB, not Alfred's DB)
 """
 
+import argparse
 import json
 import sys
+import urllib.error
 import urllib.request
 import os
 from tracking import add_processed_id
@@ -44,16 +48,8 @@ def validate_change(change):
     
     return True, "Valid"
 
-def update_question(question_id, data):
-    """
-    Update a question in the QUIZ DATABASE (uhfsfedwteeoxsvixvtr).
-    
-    This function performs TWO operations:
-    1. PATCH raw_questions_he — updates the source table with refined content
-    2. POST/PATCH questions_he — upserts the refined question into production table
-    
-    Service key bypasses RLS on both tables.
-    """
+def update_question(question_id, data, lang="he"):
+    """Update a question by calling the database RPC function `update_question`."""
     headers = {
         "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}",
@@ -61,99 +57,63 @@ def update_question(question_id, data):
         "Prefer": "return=representation"
     }
 
-    patch_payload = {
-        "Question":       data.get("Question"),
-        "Option 1":       data.get("Option 1"),
-        "Option 2":       data.get("Option 2"),
-        "Option 3":       data.get("Option 3"),
-        "Option 4":       data.get("Option 4"),
-        "Correct Answer": data.get("Correct Answer"),
-        "category_id":    data.get("category_id"),
-        "difficulty":     data.get("difficulty")
+    payload = {
+        "p_id": question_id,
+        "p_question": data.get("Question"),
+        "p_option_1": data.get("Option 1"),
+        "p_option_2": data.get("Option 2"),
+        "p_option_3": data.get("Option 3"),
+        "p_option_4": data.get("Option 4"),
+        "p_correct_answer": data.get("Correct Answer"),
+        "p_category_id": data.get("category_id"),
+        "p_difficulty": data.get("difficulty"),
+        "p_lang": lang,
     }
 
-    # 1. Update raw_questions_he
-    url = f"{SUPABASE_URL}/rest/v1/raw_questions_he?id=eq.{question_id}"
     req = urllib.request.Request(
-        url,
-        data=json.dumps(patch_payload).encode('utf-8'),
+        f"{SUPABASE_URL}/rest/v1/rpc/update_question",
+        data=json.dumps(payload).encode("utf-8"),
         headers=headers,
-        method='PATCH'
+        method="POST",
     )
-    
+
     try:
         with urllib.request.urlopen(req) as response:
-            result = json.loads(response.read().decode())
-            
-            # 2. Also upsert into questions_he
-            if result:
-                upsert_payload = {
-                    "id": question_id,
-                    **patch_payload
-                }
-                
-                upsert_url = f"{SUPABASE_URL}/rest/v1/questions_he"
-                upsert_req = urllib.request.Request(
-                    upsert_url,
-                    data=json.dumps(upsert_payload).encode('utf-8'),
-                    headers=headers,
-                    method='POST'
-                )
-                
-                # Try to insert; if it already exists, try PATCH
-                try:
-                    with urllib.request.urlopen(upsert_req) as upsert_response:
-                        pass  # Success - inserted new row
-                except urllib.error.HTTPError as e:
-                    if e.code == 409:
-                        # Already exists, update it instead
-                        upsert_req_patch = urllib.request.Request(
-                            f"{SUPABASE_URL}/rest/v1/questions_he?id=eq.{question_id}",
-                            data=json.dumps(patch_payload).encode('utf-8'),
-                            headers=headers,
-                            method='PATCH'
-                        )
-                        try:
-                            with urllib.request.urlopen(upsert_req_patch) as upsert_response:
-                                pass  # Success - updated existing row
-                        except:
-                            pass  # Non-critical, raw_questions_he was already updated
-                    else:
-                        pass  # Non-critical, raw_questions_he was updated
-                
-                # Mark as successfully refined
-                add_processed_id(
-                    question_id,
-                    "refined",
-                    difficulty=data.get("difficulty"),
-                    category_id=data.get("category_id")
-                )
-            return result[0] if result else None
+            response.read()  # 204 is fine; body may be empty
+
+        add_processed_id(
+            question_id,
+            "refined",
+            difficulty=data.get("difficulty"),
+            category_id=data.get("category_id"),
+            lang=lang,
+        )
+        return True
     except urllib.error.HTTPError as e:
-        # Try to read error body for more details
         try:
             error_body = e.read().decode()
             error_msg = f"{e} — {error_body}"
-        except:
+        except Exception:
             error_msg = str(e)
-        
-        # Mark as failed
-        add_processed_id(question_id, "failed", error=error_msg)
+
+        add_processed_id(question_id, "failed", error=error_msg, lang=lang)
         print(f"Error updating question {question_id}: {error_msg}")
-        return None
+        return False
     except Exception as e:
-        # Mark as failed
-        add_processed_id(question_id, "failed", error=str(e))
+        add_processed_id(question_id, "failed", error=str(e), lang=lang)
         print(f"Error updating question {question_id}: {e}")
-        return None
+        return False
 
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: python3 submit_changes.py <changes_file.json> [--dry-run]")
-        sys.exit(1)
-    
-    changes_file = sys.argv[1]
-    dry_run = "--dry-run" in sys.argv
+    parser = argparse.ArgumentParser()
+    parser.add_argument("changes_file")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--lang", choices=["he", "en"], default="he")
+    args = parser.parse_args()
+
+    changes_file = args.changes_file
+    dry_run = args.dry_run
+    lang = args.lang
     
     try:
         with open(changes_file) as f:
@@ -183,7 +143,7 @@ def main():
     print(f"✅ All changes are valid\n")
     
     if dry_run:
-        print("🏜️  DRY RUN — No changes will be submitted")
+        print(f"🏜️  DRY RUN — No changes will be submitted (lang={lang})")
         print(f"Would update {len(changes)} questions:\n")
         for change in changes:
             qid = change.get("id")
@@ -191,7 +151,7 @@ def main():
         print("\nTo actually submit, run without --dry-run flag")
         return
     
-    print(f"📤 Submitting {len(changes)} question updates...\n")
+    print(f"📤 Submitting {len(changes)} question updates (lang={lang})...\n")
     
     successful = 0
     failed = 0
@@ -200,7 +160,7 @@ def main():
         question_id = change.get("id")
         update_data = {k: v for k, v in change.items() if k != "id"}
         
-        result = update_question(question_id, update_data)
+        result = update_question(question_id, update_data, lang=lang)
         if result:
             successful += 1
             print(f"  ✅ Question {question_id} updated")
