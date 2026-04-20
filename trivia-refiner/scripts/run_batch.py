@@ -86,11 +86,16 @@ TASK 1 — REPHRASE each question AND review its wrong options:
 - Keep the correct answer UNCHANGED — never alter it, never use it as a wrong option
 - If question data is clearly corrupted (e.g. contains unrelated words like ingredient names), mark it SKIP
 
-OPTION RULES (apply to every wrong option individually):
-- You MUST change at least one wrong option per question — no exceptions
-- REPLACE any option that is too specific: unique proper nouns, specific song titles, specific person names, or niche references that could only come from a copyrighted quiz source
-- Even if all options seem generic, still replace at least one with a plausible alternative of the same type (e.g. swap one band name for a different real band name, one city for another city, one historical figure for another)
-- When replacing, use a plausible alternative of the same type — realistic enough to be a believable wrong answer
+OPTION RULES (preserve correctness first):
+- Change a wrong option ONLY when it is safe to do so
+- Prefer a plausible distractor of the same type that is clearly wrong for this exact question
+- Before changing an option, verify the replacement does NOT create a second correct answer and does NOT make the question ambiguous
+- If changing an option would risk damaging correctness, leave the options unchanged
+- For questions of the form "איזו מהאפשרויות אינה...", "מי מהבאים אינו...", "איזה מהבאים אינו...", or other outsider / NOT questions:
+  - keep the in-group structure intact
+  - do NOT change options by default
+  - only change an option if it is clearly broken, duplicated, or malformed
+  - if a change is necessary, replace it with another option that still belongs to the same in-group
 - NEVER replace a wrong option with the correct answer text, even partially
 - Add a 📝 note for every option you change: "אופציה שונתה: [old] → [new]"
 

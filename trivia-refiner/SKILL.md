@@ -84,10 +84,12 @@ ID 204 | Hebrew question text...
    - Improve phrasing for clarity
    - Hebrew only (no English, no translations)
 3. **Review wrong options**
-   - REPLACE if too specific (unique names, niche references, copyrighted content)
+   - Preserve correctness over forced option changes
+   - Change a wrong option only when it is safe to do so
+   - REPLACE if too specific (unique names, niche references, copyrighted content) and the replacement is clearly wrong for this exact question
    - KEEP if generic (common cities, well-known figures, general concepts)
-   - MANDATORY: Change at least 1 wrong option per question
-   - When replacing: use plausible alternative of same type
+   - Verify the replacement does NOT create a second correct answer and does NOT make the question ambiguous
+   - For "NOT" / outsider questions, keep the in-group options intact unless an option is clearly broken and must be replaced with another in-group example
    - NEVER replace with correct answer
 4. **Assign category & difficulty**
    - Best matching category ID
