@@ -85,10 +85,11 @@ ID 204 | Hebrew question text...
    - Hebrew only (no English, no translations)
 3. **Review wrong options**
    - Preserve correctness over forced option changes
-   - Change a wrong option only when it is safe to do so
+   - Try to change at least one wrong option per non-SKIP question when a clearly safe replacement exists
    - REPLACE if too specific (unique names, niche references, copyrighted content) and the replacement is clearly wrong for this exact question
    - KEEP if generic (common cities, well-known figures, general concepts)
    - Verify the replacement does NOT create a second correct answer and does NOT make the question ambiguous
+   - Do not count typo-only or punctuation-only cleanup as a meaningful option refresh
    - For "NOT" / outsider questions, keep the in-group options intact unless an option is clearly broken and must be replaced with another in-group example
    - NEVER replace with correct answer
 4. **Assign category & difficulty**

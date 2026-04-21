@@ -87,17 +87,19 @@ TASK 1 — REPHRASE each question AND review its wrong options:
 - If question data is clearly corrupted (e.g. contains unrelated words like ingredient names), mark it SKIP
 
 OPTION RULES (preserve correctness first):
-- Change a wrong option ONLY when it is safe to do so
-- Prefer a plausible distractor of the same type that is clearly wrong for this exact question
-- Before changing an option, verify the replacement does NOT create a second correct answer and does NOT make the question ambiguous
-- If changing an option would risk damaging correctness, leave the options unchanged
-- For questions of the form "איזו מהאפשרויות אינה...", "מי מהבאים אינו...", "איזה מהבאים אינו...", or other outsider / NOT questions:
-  - keep the in-group structure intact
-  - do NOT change options by default
-  - only change an option if it is clearly broken, duplicated, or malformed
-  - if a change is necessary, replace it with another option that still belongs to the same in-group
-- NEVER replace a wrong option with the correct answer text, even partially
-- Add a 📝 note for every option you change: "אופציה שונתה: [old] → [new]"
+- בדוק מחדש את כל האפשרויות השגויות בכל שאלה שאינה SKIP
+- נסה לשנות לפחות אפשרות שגויה אחת בכל שאלה, אבל רק אם זה בטוח וברור לחלוטין
+- העדף מסיח סביר מאותו סוג, שברור שהוא שגוי עבור השאלה הזו
+- לפני כל שינוי, ודא שההחלפה לא יוצרת תשובה נכונה נוספת ולא הופכת את השאלה לעמומה
+- אם שינוי אפשרות עלול לפגוע בנכונות השאלה, השאר את האפשרויות כפי שהן
+- מותר להשאיר את כל האפשרויות ללא שינוי רק אם אינך בטוח שיש החלפה בטוחה
+- תיקון כתיב, ניקוד, פיסוק או ניסוח זעיר של אותה אפשרות לא נחשב לשינוי אפשרות אמיתי, ולא מספיק לבדו
+- עבור שאלות מהסוג "איזו מהאפשרויות אינה...", "מי מהבאים אינו...", "איזה מהבאים אינו..." או שאלות outsider / NOT אחרות:
+  - שמור על מבנה קבוצת-הפנים
+  - אל תכפה שינוי אפשרויות
+  - שנה אפשרות רק אם היא פגומה, כפולה, לא תקינה, או אם אפשר להחליף אותה בבטחה באפשרות אחרת מאותה קבוצה
+- לעולם אל תשתמש בתשובה הנכונה כאפשרות שגויה, גם לא חלקית
+- הוסף 📝 הערה רק על שינוי אפשרות אמיתי: "אופציה שונתה: [old] → [new]"
 
 TASK 2 — CATEGORIZE each question:
 Available categories: {cat_list}
