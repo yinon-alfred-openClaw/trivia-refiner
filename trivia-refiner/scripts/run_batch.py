@@ -84,7 +84,9 @@ TASK 1 — REPHRASE each question AND review its wrong options:
 - Rephrasing is MANDATORY for every question
 - Hebrew only — no English, no parentheses with translations
 - Keep the correct answer UNCHANGED — never alter it, never use it as a wrong option
-- If question data is clearly corrupted (e.g. contains unrelated words like ingredient names), mark it SKIP
+- Mark a question as SKIP only if it is truly broken: gibberish, malformed structure, missing core data, placeholder values like None, or another concrete source failure
+- If the question is understandable but you think it is weak, ambiguous, disputed, outdated, or badly written, do NOT mark it SKIP
+- Instead, process it normally and add a bottom note in this format: 🚩 [short reason why the question may be problematic]
 
 OPTION RULES (preserve correctness first):
 - בדוק מחדש את כל האפשרויות השגויות בכל שאלה שאינה SKIP
@@ -119,6 +121,11 @@ ID:N
 
 For SKIP questions:
 ID:N — ⚠️ דילוג — שאלה פגומה בבסיס הנתונים
+
+---
+
+If you have concerns about a question but it is still processable, add this line directly under that question block:
+🚩 [short reason why the question may be problematic]
 
 ---
 
