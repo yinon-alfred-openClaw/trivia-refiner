@@ -84,6 +84,7 @@ def update_question(question_id, data, lang="he"):
         add_processed_id(
             question_id,
             "refined",
+            tracking_lang=lang,
             difficulty=data.get("difficulty"),
             category_id=data.get("category_id"),
             lang=lang,
@@ -96,11 +97,11 @@ def update_question(question_id, data, lang="he"):
         except Exception:
             error_msg = str(e)
 
-        add_processed_id(question_id, "failed", error=error_msg, lang=lang)
+        add_processed_id(question_id, "failed", tracking_lang=lang, error=error_msg, lang=lang)
         print(f"Error updating question {question_id}: {error_msg}")
         return False
     except Exception as e:
-        add_processed_id(question_id, "failed", error=str(e), lang=lang)
+        add_processed_id(question_id, "failed", tracking_lang=lang, error=str(e), lang=lang)
         print(f"Error updating question {question_id}: {e}")
         return False
 
@@ -170,7 +171,12 @@ def main():
     
     print(f"\n{'='*60}")
     print(f"Results: {successful} succeeded, {failed} failed")
-    print(f"Tracking file: {os.path.expanduser('~/.openclaw/workspace/memory/trivia-refiner-processed.json')}")
+    tracking_file = os.path.expanduser(
+        '~/.openclaw/workspace/memory/trivia-refiner-en-processed.json'
+        if lang == 'en'
+        else '~/.openclaw/workspace/memory/trivia-refiner-processed.json'
+    )
+    print(f"Tracking file: {tracking_file}")
     print(f"{'='*60}")
 
 if __name__ == "__main__":
