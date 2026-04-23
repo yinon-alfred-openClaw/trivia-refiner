@@ -83,6 +83,7 @@ OPT1:{q.get('Option 1','')} | OPT2:{q.get('Option 2','')} | OPT3:{q.get('Option 
 TASK 1 — REPHRASE each question AND review its wrong options:
 - Rephrasing is MANDATORY for every question
 - Hebrew only — no English, no parentheses with translations
+- The QUESTION TEXT itself must be rephrased every time. Changing only the options is NOT enough
 - Keep the correct answer UNCHANGED — never alter it, never use it as a wrong option
 - Mark a question as SKIP only if it is truly broken: gibberish, malformed structure, missing core data, placeholder values like None, or another concrete source failure
 - If the question is understandable but you think it is weak, ambiguous, disputed, outdated, or badly written, do NOT mark it SKIP
@@ -100,8 +101,19 @@ OPTION RULES (preserve correctness first):
   - שמור על מבנה קבוצת-הפנים
   - אל תכפה שינוי אפשרויות
   - שנה אפשרות רק אם היא פגומה, כפולה, לא תקינה, או אם אפשר להחליף אותה בבטחה באפשרות אחרת מאותה קבוצה
+- עבור שאלות מסוג "כל התשובות נכונות", "אף תשובה אינה נכונה" או מבנים מקבילים שבהם ההיגיון תלוי בכלל האפשרויות יחד:
+  - העדף לנסח מחדש רק את השאלה עצמה
+  - השאר את התשובה הנכונה ללא שינוי
+  - אל תשנה אפשרויות אם שינוי שלהן עלול לשבור את ההיגיון של "כל התשובות נכונות" / "אף תשובה אינה נכונה"
+  - אל תהפוך את מבנה השאלה אם אפשר להימנע מזה
 - לעולם אל תשתמש בתשובה הנכונה כאפשרות שגויה, גם לא חלקית
 - הוסף 📝 הערה רק על שינוי אפשרות אמיתי: "אופציה שונתה: [old] → [new]"
+
+EXAMPLES:
+- BAD: להשאיר את השאלה המקורית כמו שהיא ולשנות רק אפשרות אחת
+- RIGHT: לנסח מחדש את השאלה עצמה גם אם שינוי האפשרויות מינימלי או לא נדרש
+- BAD: בשאלת "כל התשובות נכונות" לשנות את מבנה השאלה, להחליף אפשרויות, או לעדכן את התשובה הנכונה כשאין בכך הכרח
+- RIGHT: בשאלת "כל התשובות נכונות" לנסח מחדש רק את השאלה עצמה, ולהשאיר את האפשרויות ואת התשובה הנכונה כפי שהן אם שינוי עלול לפגוע בלוגיקה
 
 TASK 2 — CATEGORIZE each question:
 Available categories: {cat_list}

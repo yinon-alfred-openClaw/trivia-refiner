@@ -85,12 +85,14 @@ ID 204 | Hebrew question text...
    - Hebrew only (no English, no translations)
 3. **Review wrong options**
    - Preserve correctness over forced option changes
+   - Rephrase the question text itself every time. Changing only the options does not satisfy the task
    - Try to change at least one wrong option per non-SKIP question when a clearly safe replacement exists
    - REPLACE if too specific (unique names, niche references, copyrighted content) and the replacement is clearly wrong for this exact question
    - KEEP if generic (common cities, well-known figures, general concepts)
    - Verify the replacement does NOT create a second correct answer and does NOT make the question ambiguous
    - Do not count typo-only or punctuation-only cleanup as a meaningful option refresh
    - For "NOT" / outsider questions, keep the in-group options intact unless an option is clearly broken and must be replaced with another in-group example
+   - For "כל התשובות נכונות" / "אף תשובה אינה נכונה" structures, prefer rephrasing only the question stem and keep the options + correct answer unchanged when edits could break the logic
    - NEVER replace with correct answer
 4. **Assign category & difficulty**
    - Best matching category ID
@@ -145,6 +147,9 @@ or:
 | **Wait for explicit "APPROVE" or "FIXES"** | No assumptions about user intent |
 | **Both rephrasing & review happen before sending** | User sees the finished product, not the work-in-progress |
 | **Track all changes** | Maintain history in tracking file |
+| **Reserve SKIP for truly broken questions** | Weak, ambiguous, or debatable questions should get a 🚩 note, not automatic SKIP |
+| **Rephrase the question, not just the options** | A batch is wrong if the green question text stayed effectively unchanged |
+| **Treat "כל התשובות נכונות" as a special case** | Usually rephrase only the stem and avoid touching options if that risks breaking the logic |
 
 ---
 
@@ -287,6 +292,20 @@ update_batch.py 193-202
 ```
 
 ---
+
+## Examples
+
+### Bad vs right: unchanged question
+
+**Bad:** leave the green question text the same and only refresh an option.
+
+**Right:** rewrite the question text itself, even if option changes are minimal or unnecessary.
+
+### Bad vs right: "כל התשובות נכונות"
+
+**Bad:** invert the question, swap options, or change the correct answer when the original structure can be preserved.
+
+**Right:** rephrase only the question stem and keep the options plus `כל התשובות נכונות` unchanged when option edits could damage the logic.
 
 ## Troubleshooting
 
