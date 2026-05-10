@@ -60,7 +60,7 @@ def fetch_questions(after_id, limit=10):
 def fetch_categories():
     url = f"{SUPABASE_URL}/rest/v1/rpc/get_all_categories"
     headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"}
-    req = urllib.request.Request(url, data=b'{}', headers=headers, method='POST')
+    req = urllib.request.Request(url, data=json.dumps({"language": "he"}).encode("utf-8"), headers=headers, method='POST')
     try:
         with urllib.request.urlopen(req) as response:
             return json.loads(response.read().decode())
@@ -78,7 +78,7 @@ ID:{q['id']} | {q.get('Question', '')}
 OPT1:{q.get('Option 1','')} | OPT2:{q.get('Option 2','')} | OPT3:{q.get('Option 3','')} | OPT4:{q.get('Option 4','')} | CORRECT:{q.get('Correct Answer','')}
 """
 
-    return f"""You are processing Hebrew trivia questions. You must do THREE tasks and return ONLY the final formatted output — nothing else.
+    return f"""You are processing Hebrew trivia questions. You must do FOUR tasks and return ONLY the final formatted output — nothing else.
 
 TASK 1 — REPHRASE each question AND review its wrong options:
 - Rephrasing is MANDATORY for every question
@@ -86,6 +86,11 @@ TASK 1 — REPHRASE each question AND review its wrong options:
 - The QUESTION TEXT itself must be rephrased every time. Changing only the options is NOT enough
 - Keep the correct answer UNCHANGED — never alter it, never use it as a wrong option
 - Mark a question as SKIP only if it is truly broken: gibberish, malformed structure, missing core data, placeholder values like None, or another concrete source failure
+- If the question text is damaged, missing, or appears to contain only answer options, but the options and correct answer exist:
+  - FLAG the issue with a 🚩 note
+  - Try to infer the intended question from the options and correct answer
+  - If you can reconstruct a sensible, useful question, include it in the batch with the reconstructed question, category, difficulty, and a low confidence score
+  - If no good question can be inferred safely, mark it SKIP; do not invent a weak question just to avoid skipping
 - If the question is understandable but you think it is weak, ambiguous, disputed, outdated, or badly written, do NOT mark it SKIP
 - Instead, process it normally and add a bottom note in this format: 🚩 [short reason why the question may be problematic]
 
@@ -119,19 +124,52 @@ TASK 2 — CATEGORIZE each question:
 Available categories: {cat_list}
 Assign the single most fitting category ID and difficulty (easy/medium/hard).
 
-TASK 3 — FORMAT the output as follows (this is the ONLY thing you return):
+TASK 3 — SELF-RANK your own work for each question:
+- Add a self-score from 1 to 10 based on how confident you are in the rephrase, option quality, and overall soundness
+- 1 = very poor / badly broken / strong unresolved concern
+- 5 = usable but shaky, notable concern remains
+- 10 = excellent, confident result
+- If you add a 🚩 note for any reason, the score MUST be BELOW 5
+- If you noticed a problem in the source question, ambiguity, outdated fact risk, weak distractors, or any compromise in your refinement, the score MUST be BELOW 5
+- Scores above 5 are only for clean questions with no 🚩 note and no unresolved concern
+- Use this scale strictly:
+  - 1-4 = warning / problematic / compromised
+  - 5 = borderline but still usable
+  - 6-10 = clean and confident, no warning note
 
-For each valid question:
+TASK 3.5 — SEMI-AUTO DECISION:
+- Mark each processed question internally as AUTO-SUBMIT only if ALL are true:
+  - score is 7+
+  - no 🚩 warning and no ⚠️ low-score line
+  - not reconstructed from damaged/missing source text
+  - not a fragile "כל התשובות נכונות" / "אף תשובה אינה נכונה" logic question
+  - no factual uncertainty, ambiguity, disputed wording, or outdated-fact risk
+  - correct answer is preserved and options are safe
+- Hold every other question for Yinon review.
+- Auto-submit eligible questions may be written to DB with update_question; held questions require explicit approval.
+- Always provide a summary: "Hebrew trivia: updated X questions automatically, held Y for review."
+- If Y > 0, send only the held question blocks to Yinon. If Y = 0, send only the summary.
+
+TASK 4 — FORMAT USER-FACING OUTPUT AFTER SEMI-AUTO SUBMISSION:
+- Do not show the full batch by default.
+- After auto-submitting eligible questions, output the summary first.
+- Then include only HELD question blocks for Yinon review.
+- If no questions are held, output only the summary.
+
+For each HELD valid question:
 ID:N
 🔴 [original question]
 [orig opt1] | [orig opt2] | [orig opt3] | [orig opt4] | ✓ [correct answer]
 🟢 [rephrased question]
 [new opt1] | [new opt2] | [new opt3] | [new opt4] | ✓ [correct answer]
-📁 [category_id] | ⚡ [difficulty]
+📁 [category_id] | ⚡ [difficulty] | 🎯 [score]/10
+
+If score < 5, add this line directly under the question block:
+⚠️ דירוג נמוך — [short reason]
 
 ---
 
-For SKIP questions:
+For HELD/SKIP questions:
 ID:N — ⚠️ דילוג — שאלה פגומה בבסיס הנתונים
 
 ---
@@ -147,13 +185,15 @@ ID:N
 [original options] | ✓ [old correct answer]
 🟢 [rephrased question]
 [new options] | ✓ [NEW correct answer]
-📁 [category_id] | ⚡ [difficulty]
+📁 [category_id] | ⚡ [difficulty] | 🎯 [score]/10
 ⚠️ שאלה הופכה — התשובה הנכונה עודכנה ל: [new correct answer]
 
 ---
 
-End the entire output with this line:
-האם לאשר ולשלוח את השינויים לבסיס הנתונים? ✅ / ❌
+If there are held questions, end with this line:
+לאשר את השאלות שהוחזקו לבדיקה? ✅ / ❌
+
+If there are no held questions, end after the summary line.
 
 QUESTIONS TO PROCESS:
 {q_text}

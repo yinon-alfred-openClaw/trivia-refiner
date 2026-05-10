@@ -1,13 +1,15 @@
 ---
 name: trivia-refiner
-description: "Refine Hebrew trivia questions through a 2-stage workflow: (1) Fetch batch → User approves rephrasing, (2) Rephrase + format → User reviews + approves → Update database. Rephrases questions, reviews options, assigns categories and difficulty. Database is NEVER updated until user explicitly approves the formatted batch."
+description: "Refine Hebrew trivia questions through a semi-auto workflow: process batches, automatically submit clean high-confidence questions via update_question, and send only flagged/low-confidence/reconstructed questions to Yinon for review."
 ---
 
-# Trivia Refiner — User-Approved Workflow
+# Trivia Refiner — Semi-Auto Review Workflow
 
 **🎯 DATABASE: Quiz Supabase (`uhfsfedwteeoxsvixvtr`)**
 
-This skill refines Hebrew trivia questions with strict user oversight. **No database changes happen without explicit user approval.**
+This skill refines Hebrew trivia questions with guarded automation. Yinon has approved semi-auto mode: clean high-confidence questions may be submitted automatically, while risky questions must be held for review.
+
+**Current mode:** Auto-submit only clean questions with score **7+**. Send all flagged, reconstructed, fragile, or score ≤6 questions to Yinon before any DB write for those held items.
 
 ---
 
@@ -32,19 +34,44 @@ This skill refines Hebrew trivia questions with strict user oversight. **No data
 
 ---
 
-### Stage 2: REPHRASE + REVIEW + UPDATE (Interactive)
+### Stage 2: REPHRASE + SEMI-AUTO UPDATE
 
 When you reply `REPHRASE X-Y`:
 
 1. **I rephrase** the questions (improve Hebrew phrasing, clarity)
 2. **I review options** (replace overly specific ones with plausible alternatives)
 3. **I assign categories & difficulty** (best match from available categories)
-4. **I format with template** and send to you for review
-5. **WAIT for your review**
-6. **You send back approval** with any fixes you want
-7. **Only then I update** the database using the update_question RPC function
+4. **I add a self-score (1-10)** for each refined question
+5. **I classify each question** as AUTO-SUBMIT or HOLD FOR REVIEW
+6. **I auto-submit only clean AUTO-SUBMIT questions** with the `update_question` RPC/submit script
+7. **I send Yinon only the held questions** plus a daily summary of how many were updated and how many need review
+8. **Held questions are updated only after explicit approval/fixes**
 
-**This is the critical part: NO database write until you approve.**
+**Critical:** Semi-auto approval applies only to clean high-confidence questions. Anything risky is still approval-first.
+
+### Auto-submit eligibility
+
+Auto-submit a question only when **all** are true:
+- Score is **7+**
+- No 🚩 warning
+- No ⚠️ low-score line
+- Not reconstructed from damaged/missing source text
+- Not a fragile “כל התשובות נכונות” / “אף תשובה אינה נכונה” logic question
+- No factual uncertainty, ambiguity, disputed wording, or outdated-fact risk
+- Correct answer is preserved and the option set is safe
+
+Hold for review when **any** are true:
+- Score is **≤6**
+- Any 🚩 or ⚠️ appears
+- Question was reconstructed from options/damaged source
+- Question has “all/none of the above” fragile logic
+- Fact requires external verification or feels uncertain
+- Options are weak, ambiguous, duplicated, or may create a second correct answer
+- The model is not confident enough to submit unattended
+
+Always send a daily summary, even when nothing is held:
+- `Hebrew trivia: updated X questions automatically, held Y for review.`
+- If Y > 0, include only the held question blocks for review.
 
 ---
 
@@ -83,6 +110,9 @@ ID 204 | Hebrew question text...
    - Keep question meaning identical
    - Improve phrasing for clarity
    - Hebrew only (no English, no translations)
+   - If the source question is damaged/missing but the options and correct answer exist, flag it and try to reconstruct a sensible question from that context
+   - If reconstruction is plausible, include the reconstructed question in the batch with a 🚩 warning and a low confidence score
+   - If no good question can be inferred safely, skip it; do not invent a weak question just to fill the batch
 3. **Review wrong options**
    - Preserve correctness over forced option changes
    - Rephrase the question text itself every time. Changing only the options does not satisfy the task
@@ -97,8 +127,13 @@ ID 204 | Hebrew question text...
 4. **Assign category & difficulty**
    - Best matching category ID
    - Difficulty: easy/medium/hard
-5. **Format with template**
-6. **Send to you for review**
+5. **Add self-score**
+   - Score every refined question from 1-10
+   - Any 🚩 warning or unresolved concern must score below 5
+   - Above 5 = confident, solid result with no warning note
+   - If below 5, add a short reason line
+6. **Format with template**
+7. **Auto-submit eligible clean questions; send only held questions for review with a summary**
 
 **Template format:**
 ```
@@ -108,14 +143,21 @@ ID 203
 
 🟢 [rephrased question]
 [opt1] | [opt2] | [opt3] | [opt4] | ✓ [correct answer]
-📁 Category (ID) | ⚡ difficulty
+📁 Category (ID) | ⚡ difficulty | 🎯 score/10
+
+⚠️ דירוג נמוך — [reason]   # only when score < 5
 
 ---
 
 [repeat for all 10 questions]
 
-⏸️ Ready to update? Review above, then reply:
-   APPROVE 203-212
+Summary:
+Hebrew trivia: updated X questions automatically, held Y for review.
+
+[If Y > 0, include only held question blocks here]
+
+⏸️ For held questions, reply:
+   APPROVE HELD
 or:
    FIXES [describe changes needed]
 ```
@@ -142,12 +184,13 @@ or:
 
 | Rule | Why |
 |------|-----|
-| **Never update DB without user approval** | Prevents accidental changes to production |
-| **Always format for review first** | User sees exactly what will be changed |
-| **Wait for explicit "APPROVE" or "FIXES"** | No assumptions about user intent |
+| **Auto-submit only clean 7+ questions** | Yinon approved semi-auto mode, but only for low-risk high-confidence items |
+| **Hold risky questions for review** | Flags, low scores, reconstruction, fragile logic, or uncertainty still require approval |
+| **Always send a daily summary** | Yinon should know how many questions were updated even if none were flagged |
 | **Both rephrasing & review happen before sending** | User sees the finished product, not the work-in-progress |
 | **Track all changes** | Maintain history in tracking file |
 | **Reserve SKIP for truly broken questions** | Weak, ambiguous, or debatable questions should get a 🚩 note, not automatic SKIP |
+| **Try to recover damaged questions from options** | If the stem is missing/corrupt but options + correct answer reveal the likely question, include it with a 🚩 warning and low score; skip only when no good reconstruction is possible |
 | **Rephrase the question, not just the options** | A batch is wrong if the green question text stayed effectively unchanged |
 | **Treat "כל התשובות נכונות" as a special case** | Usually rephrase only the stem and avoid touching options if that risks breaking the logic |
 
