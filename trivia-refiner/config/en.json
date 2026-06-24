@@ -1,0 +1,8 @@
+{
+  "lang": "en",
+  "raw_table": "questions_raw_en",
+  "final_table": "questions_en",
+  "tracking_file": "memory/trivia-refiner-en-processed.json",
+  "artifact_dir": "memory/trivia-consensus/en",
+  "output_language": "English"
+}

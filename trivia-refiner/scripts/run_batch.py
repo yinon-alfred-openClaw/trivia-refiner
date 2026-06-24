@@ -1,313 +1,399 @@
 #!/usr/bin/env python3
-"""
-Trivia Refiner — Daily Batch Runner
-Fetches 10 questions, processes them via Sonnet,
-and prints the formatted comparison for user approval.
-Cron's --announce flag sends output to Telegram.
+"""Config-driven trivia refiner batch prompt builder.
+
+This script intentionally does not refine or submit questions itself. It reads
+the next raw batch for the requested language, builds the prompt for the
+trivia-manager agent, and increments the per-language batch counter.
 """
 
+from __future__ import annotations
+
+import argparse
 import json
 import os
 import sys
 import urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
 
-# Load credentials
-creds_path = os.path.expanduser("~/.openclaw/workspace/memory/supabase-creds.json")
-try:
-    with open(creds_path) as f:
-        creds = json.load(f)
-    SUPABASE_URL = creds["url"]
-    SUPABASE_KEY = creds["key"]
-except Exception as e:
-    print(f"❌ Error loading credentials: {e}")
-    sys.exit(1)
 
-TRACKING_FILE = os.path.expanduser("~/.openclaw/workspace/memory/trivia-refiner-processed.json")
-FINAL_TABLE = "questions_he"
-RAW_TABLE = "raw_questions_he"
+WORKSPACE = Path("/home/ubuntu/.openclaw/workspace")
+SKILL_ROOT = Path(__file__).resolve().parents[1]
+CONFIG_DIR = SKILL_ROOT / "config"
+CREDS_PATH = WORKSPACE / "memory" / "supabase-creds.json"
 
-def load_tracking():
-    if not os.path.exists(TRACKING_FILE):
-        return {"version": "1", "processed": [], "batch_count": 0}
-    with open(TRACKING_FILE) as f:
+LANGUAGE_PROFILES = {
+    "he": {
+        "label": "Hebrew",
+        "batch_label": "בצ'ים",
+        "ready": "מוכן לעיבוד",
+        "no_more": "לא נמצאו שאלות נוספות",
+        "process_line": "Alfred — process the following Hebrew questions using the rules below:",
+        "language_rule": "Hebrew only — no English, no parentheses with translations",
+        "option_rules": """- בדוק מחדש את כל האפשרויות השגויות בכל שאלה שאינה SKIP
+- נסה לשנות לפחות אפשרות שגויה אחת בכל שאלה, אבל רק אם זה בטוח וברור לחלוטין
+- העדף מסיח סביר מאותו סוג, שברור שהוא שגוי עבור השאלה הזו
+- לפני כל שינוי, ודא שההחלפה לא יוצרת תשובה נכונה נוספת ולא הופכת את השאלה לעמומה
+- אם שינוי אפשרות עלול לפגוע בנכונות השאלה, השאר את האפשרויות כפי שהן
+- עבור שאלות נכון/לא נכון, שמור על מבנה שתי תשובות ואל תמציא מסיחים נוספים
+- עבור שאלות outsider / NOT, שמור על מבנה קבוצת-הפנים ואל תכפה שינוי אפשרויות
+- עבור שאלות מסוג כל התשובות נכונות / אף תשובה אינה נכונה, העדף לנסח מחדש רק את השאלה עצמה
+- לעולם אל תשתמש בתשובה הנכונה כאפשרות שגויה
+- הוסף הערה רק על שינוי אפשרות אמיתי: "אופציה שונתה: [old] → [new]" """,
+        "safe_none": "🛟 הצעה בטוחה: אין — [specific blocker]",
+        "summary": "Hebrew trivia: updated X by consensus, sent Y for review.",
+        "choose_line": "לבחור/לתקן את השאלות למעלה? ✅ / ❌",
+        "low_score": "⚠️ דירוג נמוך — [short reason]",
+        "skip_line": "ID:N — ⚠️ דילוג — שאלה פגומה בבסיס הנתונים",
+        "safe_header": "🛟 הצעה בטוחה:",
+        "why_safe": "למה זה בטוח:",
+        "sources": "מקורות:",
+    },
+    "en": {
+        "label": "English",
+        "batch_label": "EN Batch",
+        "ready": "ready for review",
+        "no_more": "No additional English questions found",
+        "process_line": "Alfred — process the following English questions using the rules below:",
+        "language_rule": "English only. Keep the wording natural and concise.",
+        "option_rules": """- Re-check the wrong options for every non-SKIP question
+- Try to change at least one wrong option when it is clearly safe to do so
+- Prefer a safe distractor of the same type that is clearly wrong for this exact question
+- Before changing an option, verify the replacement does not create a second correct answer or ambiguity
+- If changing an option would risk correctness, leave the options unchanged
+- For true/false questions, preserve the two-answer structure and do not invent extra options
+- For NOT / outsider questions, keep the in-group structure intact and do not force option changes
+- For All of the above / None of the above structures, prefer rephrasing only the stem
+- Never replace a wrong option with the correct answer
+- Add a note for every changed option: "Option changed: [old] → [new]" """,
+        "safe_none": "🛟 Safe suggestion: none — [specific blocker]",
+        "summary": "English trivia: updated X by consensus, sent Y for review.",
+        "choose_line": "Choose/fix the questions above? ✅ / ❌",
+        "low_score": "⚠️ Low score — [short reason]",
+        "skip_line": "ID:N — ⚠️ SKIP — corrupted source question",
+        "safe_header": "🛟 Safe suggestion:",
+        "why_safe": "Why safe:",
+        "sources": "Sources:",
+    },
+}
+
+
+def load_json(path: Path) -> dict:
+    with path.open(encoding="utf-8") as f:
         return json.load(f)
 
-def get_last_final_question_id():
-    """Return the highest ID already present in questions_he.
 
-    The final table is the source of truth for auto batch selection. The local
-    tracking file is useful for audit history, but it must not decide the next
-    raw IDs to process.
-    """
-    url = f"{SUPABASE_URL}/rest/v1/{FINAL_TABLE}?select=id&order=id.desc&limit=1"
-    headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
-    req = urllib.request.Request(url, headers=headers)
+def load_credentials() -> tuple[str, str]:
     try:
-        with urllib.request.urlopen(req) as response:
-            rows = json.loads(response.read().decode())
-    except Exception as e:
-        print(f"❌ Error reading latest {FINAL_TABLE} id: {e}", file=sys.stderr)
+        creds = load_json(CREDS_PATH)
+        return creds["url"], creds["key"]
+    except Exception as exc:
+        print(f"❌ Error loading credentials from {CREDS_PATH}: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    return rows[0]["id"] if rows else 0
 
-def get_batch_count():
-    data = load_tracking()
-    return data.get("batch_count", 0)
+def load_config(lang: str) -> dict:
+    config_path = CONFIG_DIR / f"{lang}.json"
+    try:
+        config = load_json(config_path)
+    except Exception as exc:
+        print(f"❌ Error loading config {config_path}: {exc}", file=sys.stderr)
+        sys.exit(1)
 
-def increment_batch_count():
-    data = load_tracking()
-    data["batch_count"] = data.get("batch_count", 0) + 1
-    data["last_updated"] = __import__('datetime').datetime.utcnow().isoformat() + 'Z'
-    with open(TRACKING_FILE, "w") as f:
+    expected = {
+        "he": {
+            "raw_table": "raw_questions_he",
+            "final_table": "questions_he",
+            "tracking_file": "memory/trivia-refiner-processed.json",
+            "artifact_dir": "memory/trivia-consensus/he",
+        },
+        "en": {
+            "raw_table": "questions_raw_en",
+            "final_table": "questions_en",
+            "tracking_file": "memory/trivia-refiner-en-processed.json",
+            "artifact_dir": "memory/trivia-consensus/en",
+        },
+    }[lang]
+
+    if config.get("lang") != lang:
+        raise SystemExit(f"❌ Config language mismatch: expected {lang}, got {config.get('lang')}")
+
+    for key, value in expected.items():
+        if config.get(key) != value:
+            raise SystemExit(f"❌ Unsafe {lang} config: {key} must be {value}, got {config.get(key)}")
+
+    return config
+
+
+def tracking_path(config: dict) -> Path:
+    return WORKSPACE / config["tracking_file"]
+
+
+def artifact_dir(config: dict) -> Path:
+    return WORKSPACE / config["artifact_dir"]
+
+
+def load_tracking(config: dict) -> dict:
+    path = tracking_path(config)
+    if not path.exists():
+        return {"version": "1", "processed": [], "batch_count": 0}
+    return load_json(path)
+
+
+def save_tracking(config: dict, data: dict) -> None:
+    path = tracking_path(config)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data["last_updated"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    with path.open("w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
-def fetch_questions(start_id, limit=10):
-    url = f"{SUPABASE_URL}/rest/v1/{RAW_TABLE}?id=gte.{start_id}&limit={limit}&order=id.asc"
-    headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "x-admin-secret": "vM7N5v16k14cxs5MJZj3BjZ2bxyYr0KERPSnb5ZTr7g"}
-    req = urllib.request.Request(url, headers=headers)
-    try:
-        with urllib.request.urlopen(req) as response:
-            return json.loads(response.read().decode())
-    except Exception as e:
-        print(f"❌ Error fetching questions: {e}", file=sys.stderr)
-        return []
 
-def fetch_categories():
-    url = f"{SUPABASE_URL}/rest/v1/rpc/get_all_categories"
-    headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"}
-    req = urllib.request.Request(url, data=json.dumps({"language": "he"}).encode("utf-8"), headers=headers, method='POST')
-    try:
-        with urllib.request.urlopen(req) as response:
-            return json.loads(response.read().decode())
-    except Exception as e:
-        print(f"❌ Error fetching categories: {e}", file=sys.stderr)
-        return []
+def get_batch_count(config: dict) -> int:
+    return int(load_tracking(config).get("batch_count", 0))
 
-def build_orchestrator_prompt(questions, categories):
-    cat_list = ", ".join([f"{c['id']}={c['name']}" for c in categories])
-    
-    q_text = ""
+
+def increment_batch_count(config: dict) -> None:
+    data = load_tracking(config)
+    data["batch_count"] = int(data.get("batch_count", 0)) + 1
+    save_tracking(config, data)
+
+
+def request_json(url: str, key: str, *, data: dict | None = None) -> list | dict:
+    headers = {
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+    }
+    body = None if data is None else json.dumps(data).encode("utf-8")
+    method = "GET" if data is None else "POST"
+    req = urllib.request.Request(url, data=body, headers=headers, method=method)
+    with urllib.request.urlopen(req) as response:
+        return json.loads(response.read().decode())
+
+
+def get_last_final_question_id(config: dict, supabase_url: str, supabase_key: str) -> int:
+    final_table = config["final_table"]
+    url = f"{supabase_url}/rest/v1/{final_table}?select=id&order=id.desc&limit=1"
+    try:
+        rows = request_json(url, supabase_key)
+    except Exception as exc:
+        print(f"❌ Error reading latest {final_table} id: {exc}", file=sys.stderr)
+        sys.exit(1)
+    return rows[0]["id"] if rows else 0
+
+
+def fetch_questions(config: dict, supabase_url: str, supabase_key: str, start_id: int, limit: int) -> list:
+    raw_table = config["raw_table"]
+    url = f"{supabase_url}/rest/v1/{raw_table}?id=gte.{start_id}&limit={limit}&order=id.asc"
+    try:
+        result = request_json(url, supabase_key)
+    except Exception as exc:
+        print(f"❌ Error fetching {config['lang']} questions from {raw_table}: {exc}", file=sys.stderr)
+        return []
+    return result if isinstance(result, list) else []
+
+
+def fetch_categories(config: dict, supabase_url: str, supabase_key: str) -> list:
+    url = f"{supabase_url}/rest/v1/rpc/get_all_categories"
+    try:
+        result = request_json(url, supabase_key, data={"language": config["lang"]})
+    except Exception as exc:
+        print(f"❌ Error fetching {config['lang']} categories: {exc}", file=sys.stderr)
+        return []
+    return result if isinstance(result, list) else []
+
+
+def format_questions(questions: list) -> str:
+    lines = []
     for q in questions:
-        q_text += f"""
-ID:{q['id']} | {q.get('Question', '')}
-OPT1:{q.get('Option 1','')} | OPT2:{q.get('Option 2','')} | OPT3:{q.get('Option 3','')} | OPT4:{q.get('Option 4','')} | CORRECT:{q.get('Correct Answer','')}
-"""
+        lines.append(
+            "\n".join(
+                [
+                    f"ID:{q['id']} | {q.get('Question', '')}",
+                    (
+                        f"OPT1:{q.get('Option 1','')} | OPT2:{q.get('Option 2','')} | "
+                        f"OPT3:{q.get('Option 3','')} | OPT4:{q.get('Option 4','')} | "
+                        f"CORRECT:{q.get('Correct Answer','')}"
+                    ),
+                ]
+            )
+        )
+    return "\n\n".join(lines)
 
-    return f"""You are processing Hebrew trivia questions in CONSENSUS AUTO mode. Your goal is autonomous high-quality updating, not over-holding. Fix what you can fix safely. This is an execution task, not a text-only formatting task: use tools/commands to save artifacts, request audit, submit approved clean questions, verify the database, and only then return the final concise user-facing output.
+
+def build_prompt(config: dict, questions: list, categories: list) -> str:
+    lang = config["lang"]
+    profile = LANGUAGE_PROFILES[lang]
+    cat_list = ", ".join([f"{c['id']}={c['name']}" for c in categories])
+    q_text = format_questions(questions)
+    first_id = questions[0]["id"]
+    last_id = questions[-1]["id"]
+    artifacts = artifact_dir(config)
+    proposal_json = artifacts / f"batch-{first_id}-{last_id}-trivia-manager.json"
+    submitted_json = artifacts / f"batch-{first_id}-{last_id}-submitted.json"
+    submit_script = SKILL_ROOT / "scripts" / "submit_changes.py"
+    tracking = tracking_path(config)
+
+    return f"""You are processing {profile['label']} trivia questions in CONSENSUS AUTO mode. Your goal is autonomous high-quality updating, not over-holding. Fix what you can fix safely. This is an execution task, not a text-only formatting task: use tools/commands to save artifacts, request audit, submit approved clean questions, verify the database, and only then return the final concise user-facing output.
 
 FULL QUESTION DATA IS PROVIDED HERE. Do not ask the user to provide it again.
 QUESTIONS TO PROCESS:
 {q_text}
 
+LANGUAGE CONFIG:
+- lang: {config['lang']}
+- raw table: {config['raw_table']}
+- final table: {config['final_table']}
+- tracking file: {tracking}
+- artifact dir: {artifacts}
+
 CRITICAL CONSENSUS FLOW — BEFORE ANY DATABASE WRITE:
 1. First create your full refined proposal for every question.
 2. Save it as JSON under:
-   /home/ubuntu/.openclaw/workspace/memory/trivia-consensus/he/batch-{questions[0]['id']}-{questions[-1]['id']}-trivia-manager.json
+   {proposal_json}
    The proposal JSON may contain audit fields, but every item that might be submitted must also include this exact update schema:
    "id", "Question", "Option 1", "Option 2", "Option 3", "Option 4", "Correct Answer", "category_id", "difficulty".
-3. Do not hand-write JSON with shell heredocs. Hebrew strings may contain quote characters such as הנח"ל. Use Python `json.dump(..., ensure_ascii=False, indent=2)` or another real JSON serializer, then immediately validate the file with Python `json.load`.
+3. Do not hand-write JSON with shell heredocs. Use Python json.dump(..., ensure_ascii=False, indent=2) or another real JSON serializer, then immediately validate the file with Python json.load.
 4. If the proposal JSON or submitted-clean JSON does not parse, fix the JSON before audit/submission. Invalid JSON means zero updates and must be reported as failure.
 5. Ask Alfred/main agent to audit the original batch plus your proposal BEFORE submitting.
-   Do NOT use `sessions_send` or `sessions_history` for this audit because that path is asynchronous and may return before Alfred has answered.
+   Do NOT use sessions_send or sessions_history for this audit because that path is asynchronous and may return before Alfred has answered.
    Use a blocking CLI command through the shell, for example:
    /home/ubuntu/.npm-global/bin/openclaw agent --agent main --timeout 600 --message "<audit request>"
    The audit request MUST define Alfred as reviewer only, not a second refiner:
-   - Allowed classifications: `agree`, `reject`, `unresolved`.
-   - `agree` means Alfred confirms your exact final update preserves the original meaning, correct answer, and safe options.
-   - `reject` means your proposal changes meaning, adds unsupported facts, has unsafe options, or otherwise should not auto-submit.
-   - `unresolved` means the source/fact problem cannot be safely judged from the provided data.
+   - Allowed classifications: agree, reject, unresolved.
+   - agree means Alfred confirms your exact final update preserves the original meaning, correct answer, and safe options.
+   - reject means your proposal changes meaning, adds unsupported facts, has unsafe options, or otherwise should not auto-submit.
+   - unresolved means the source/fact problem cannot be safely judged from the provided data.
    - Do NOT ask Alfred for rewrites, improved wording, or replacement update fields.
-   - Do NOT allow an `alfred_fix` path. If Alfred returns a rewrite/fix anyway, treat that question as `reject` or `unresolved`; never submit Alfred's rewrite automatically and never show it as an alternate suggestion.
+   - Do NOT allow an alfred_fix path. If Alfred returns a rewrite/fix anyway, treat that question as reject or unresolved; never submit Alfred's rewrite automatically and never show it as an alternate suggestion.
 6. If Alfred/main audit fails, is blocked, or does not clearly approve your exact clean final version, do NOT submit and do NOT claim updates for that question.
 7. If Alfred agrees with your exact final version, submit automatically only if the final version still meets all auto-submit criteria below.
 8. If Alfred rejects or marks a question unresolved, do NOT ask Alfred to fix it. Hold it for Yinon review with your proposal and Alfred's reason.
-   For every held question, also create a separate safe_suggestion when possible. The safe_suggestion is for Yinon approval only, not automatic DB submission.
-9. Write submitted clean questions to this exact JSON file containing ONLY the exact update schema required by `submit_changes.py`:
-   /home/ubuntu/.openclaw/workspace/memory/trivia-consensus/he/batch-{questions[0]['id']}-{questions[-1]['id']}-submitted.json
-10. Validate the submitted-clean JSON with Python `json.load` before running `submit_changes.py`.
+9. Write submitted clean questions to this exact JSON file containing ONLY the exact update schema required by submit_changes.py:
+   {submitted_json}
+10. Validate the submitted-clean JSON with Python json.load before running submit_changes.py.
 11. Submit approved clean questions with:
-   python3 /home/ubuntu/.openclaw/workspace/skills/trivia-refiner/trivia-refiner/scripts/submit_changes.py <submitted-clean-json> --lang he
-12. After submission, verify that `questions_he` contains every submitted ID and that `/home/ubuntu/.openclaw/workspace/memory/trivia-refiner-processed.json` advanced accordingly. If verification fails, report the failure instead of success.
-13. If the final version after Alfred review is still score ≤6, has any 🚩/⚠️, or has unresolved truth/meaning risk, do NOT submit it; send it to Yinon for review.
-14. If Alfred rejects your proposal or marks the question unresolved, do NOT submit that question; send Yinon your proposal, Alfred's review reason, and a safe_suggestion if one can be made.
-15. Do not use “hold” as the first response to normal fixable issues. Answer-type mismatch, too-close distractor, weak phrasing, or category/difficulty problems should be fixed, then submitted only after Alfred agrees and the final re-score is clean 7+.
+   python3 {submit_script} <submitted-clean-json> --lang {lang}
+12. After submission, verify that {config['final_table']} contains every submitted ID and that {tracking} advanced accordingly. If verification fails, report the failure instead of success.
+13. If the final version after Alfred review is still score <=6, has any warning, or has unresolved truth/meaning risk, do NOT submit it; send it to Yinon for review.
+14. Do not use "hold" as the first response to normal fixable issues. Answer-type mismatch, too-close distractor, weak phrasing, or category/difficulty problems should be fixed, then submitted only after Alfred agrees and the final re-score is clean 7+.
 
 TASK 1 — REPHRASE each question AND review its wrong options:
-- Rephrasing is MANDATORY for every question
-- Hebrew only — no English, no parentheses with translations
-- The QUESTION TEXT itself must be rephrased every time. Changing only the options is NOT enough
-- Keep the correct answer UNCHANGED — never alter it, never use it as a wrong option
-- If the question is true/false (only two answers such as נכון/לא נכון or True/False), preserve the two-answer structure and keep Option 3/4 as null/empty; do not invent extra distractors
-- Mark a question as SKIP only if it is truly broken: gibberish, malformed structure, missing core data, or another concrete source failure
-- Do NOT treat a valid true/false question as broken only because Option 3 and Option 4 are None/null/empty; two-answer true/false questions are allowed
-- If the question text is damaged, missing, or appears to contain only answer options, but the options and correct answer exist:
-  - FLAG the issue with a 🚩 note
-  - Try to infer the intended question from the options and correct answer
-  - If you can reconstruct a sensible, useful question, include it in the batch with the reconstructed question, category, difficulty, and a low confidence score
-  - If no good question can be inferred safely, mark it SKIP; do not invent a weak question just to avoid skipping
-- If the question is understandable but you think it is weak, ambiguous, disputed, outdated, or badly written, do NOT mark it SKIP
-- Instead, process it normally and add a bottom note in this format: 🚩 [short reason why the question may be problematic]
+- Rephrasing is MANDATORY for every question.
+- {profile['language_rule']}
+- The question text itself must be rephrased every time. Changing only the options is not enough.
+- Keep the original meaning unless the fact-check shows a narrower wording is required.
+- Do not add unsupported facts.
+- Keep the correct answer unchanged unless the source question is explicitly inverted and you hold it for review.
+- True/false questions are valid when Option 1/2 are the only answers and Option 3/4 are null/empty.
+- Mark SKIP only for truly broken source data: gibberish, malformed structure, missing core data, or another concrete source failure.
+- If the question is damaged but options and correct answer make a sensible reconstruction possible, flag it, score it low, and hold it for review.
 
-OPTION RULES (preserve correctness first):
-- בדוק מחדש את כל האפשרויות השגויות בכל שאלה שאינה SKIP
-- נסה לשנות לפחות אפשרות שגויה אחת בכל שאלה, אבל רק אם זה בטוח וברור לחלוטין
-- העדף מסיח סביר מאותו סוג, שברור שהוא שגוי עבור השאלה הזו
-- לפני כל שינוי, ודא שההחלפה לא יוצרת תשובה נכונה נוספת ולא הופכת את השאלה לעמומה
-- ודא שהמסיח החדש שגוי בבירור. אל תשתמש במסיח שקרוב מדי סמנטית לתשובה הנכונה, נכון חלקית, או עלול לבלבל שחקן סביר
-- אם שינוי אפשרות עלול לפגוע בנכונות השאלה, השאר את האפשרויות כפי שהן
-- מותר להשאיר את כל האפשרויות ללא שינוי רק אם אינך בטוח שיש החלפה בטוחה
-- תיקון כתיב, ניקוד, פיסוק או ניסוח זעיר של אותה אפשרות לא נחשב לשינוי אפשרות אמיתי, ולא מספיק לבדו
-- עבור שאלות מהסוג "איזו מהאפשרויות אינה...", "מי מהבאים אינו...", "איזה מהבאים אינו..." או שאלות outsider / NOT אחרות:
-  - שמור על מבנה קבוצת-הפנים
-  - אל תכפה שינוי אפשרויות
-  - שנה אפשרות רק אם היא פגומה, כפולה, לא תקינה, או אם אפשר להחליף אותה בבטחה באפשרות אחרת מאותה קבוצה
-- עבור שאלות מסוג "כל התשובות נכונות", "אף תשובה אינה נכונה" או מבנים מקבילים שבהם ההיגיון תלוי בכלל האפשרויות יחד:
-  - העדף לנסח מחדש רק את השאלה עצמה
-  - השאר את התשובה הנכונה ללא שינוי
-  - אל תשנה אפשרויות אם שינוי שלהן עלול לשבור את ההיגיון של "כל התשובות נכונות" / "אף תשובה אינה נכונה"
-  - אל תהפוך את מבנה השאלה אם אפשר להימנע מזה
-- לעולם אל תשתמש בתשובה הנכונה כאפשרות שגויה, גם לא חלקית
-- הוסף 📝 הערה רק על שינוי אפשרות אמיתי: "אופציה שונתה: [old] → [new]"
-
-EXAMPLES:
-- BAD: להשאיר את השאלה המקורית כמו שהיא ולשנות רק אפשרות אחת
-- RIGHT: לנסח מחדש את השאלה עצמה גם אם שינוי האפשרויות מינימלי או לא נדרש
-- BAD: בשאלת "כל התשובות נכונות" לשנות את מבנה השאלה, להחליף אפשרויות, או לעדכן את התשובה הנכונה כשאין בכך הכרח
-- RIGHT: בשאלת "כל התשובות נכונות" לנסח מחדש רק את השאלה עצמה, ולהשאיר את האפשרויות ואת התשובה הנכונה כפי שהן אם שינוי עלול לפגוע בלוגיקה
+OPTION RULES:
+{profile['option_rules']}
 
 TASK 2 — CATEGORIZE each question:
 Available categories: {cat_list}
 Assign the single most fitting category ID and difficulty (easy/medium/hard).
 
-TASK 3 — SELF-RANK your own work for each question:
-- Add a self-score from 1 to 10 based on how confident you are in the rephrase, option quality, and overall soundness
-- 1 = very poor / badly broken / strong unresolved concern
-- 5 = usable but shaky, notable concern remains
-- 10 = excellent, confident result
-- If you add a 🚩 note for any reason, the score MUST be BELOW 5
-- If you noticed a problem in the source question, ambiguity, outdated fact risk, weak distractors, or any compromise in your refinement, the score MUST be BELOW 5
-- Scores above 5 are only for clean questions with no 🚩 note and no unresolved concern
-- Use this scale strictly:
-  - 1-4 = warning / problematic / compromised
-  - 5 = borderline but still usable
-  - 6-10 = clean and confident, no warning note
+TASK 3 — SELF-RANK your own work:
+- Add a self-score from 1 to 10 for every processed question.
+- Any warning, unresolved concern, damaged-source reconstruction, ambiguity, outdated-fact risk, or compromise must score below 5.
+- Scores 7+ are only for clean, confident questions with no warning note.
 
 TASK 3.5 — CONSENSUS AUTO DECISION:
-- Mark each processed question internally as CONSENSUS-SUBMIT only if ALL are true:
+- Mark a question internally as CONSENSUS-SUBMIT only if all are true:
   - score is 7+
-  - no 🚩 warning and no ⚠️ low-score line
+  - no warning or low-score line
   - not reconstructed from damaged/missing source text
-  - not a fragile "כל התשובות נכונות" / "אף תשובה אינה נכונה" logic question
+  - not a fragile all-of-the-above / none-of-the-above logic question
   - no factual uncertainty, ambiguity, disputed wording, or outdated-fact risk
   - correct answer is preserved and options are safe
-- Questions become DB updates only after Alfred/main agent agrees with your exact final version, AND the final submitted version is scored 7+ with no 🚩/⚠️ and no unresolved concern.
-- If the refiner score is low and Alfred/main also agrees the final version remains low/risky, send it to Yinon for review instead of submitting.
-- Send to Yinon only rejected, unresolved, or final low/risky questions.
-- Always provide a summary: "Hebrew trivia: updated X by consensus, sent Y for review."
-- X must be the number of questions actually submitted by `submit_changes.py` and verified in `questions_he`. If you did not run submit + verify successfully, X must be 0 and you must report the concrete failure.
-- If Y > 0, send only rejected/unresolved blocks. If Y = 0, send only the summary.
+- Questions become DB updates only after Alfred/main agrees with your exact final version, and the final submitted version remains clean.
+- Always provide this summary format: "{profile['summary']}"
+- X must be the number of questions actually submitted by submit_changes.py and verified in {config['final_table']}. If you did not run submit + verify successfully, X must be 0 and you must report the concrete failure.
 
 TASK 3.6 — SAFE SUGGESTIONS FOR HELD QUESTIONS:
-- For every question sent to Yinon for review, include a safe_suggestion block unless no safe version can be made.
-- The safe_suggestion must directly address the reason the question was held or rejected:
-  - unsafe distractor: replace it with clearly wrong distractors of the same type
-  - current/source-dependent wording: reframe to a stable verified fact
-  - disputed origin/superlative/date: ask a narrower, better-sourced fact
-  - damaged premise: reconstruct only if the answer/options make one safe question obvious
+- For every held question, include a safe_suggestion unless no safe version can be made.
+- The safe_suggestion must directly address the hold/rejection reason.
 - Use web verification for unstable, disputed, current, origin, political, legal, medical, superlative, or celebrity-family facts.
 - Include source URLs for every safe_suggestion that used web verification.
-- If no safe suggestion can be made, write: "🛟 הצעה בטוחה: אין — [specific blocker]".
-- Never submit a safe_suggestion automatically. It requires Yinon's explicit approval and a later `submit_changes.py --lang he` run.
+- If no safe suggestion can be made, write: "{profile['safe_none']}".
+- Never submit a safe_suggestion automatically. It requires Yinon's explicit approval and a later submit_changes.py --lang {lang} run.
 
 TASK 4 — FORMAT USER-FACING OUTPUT AFTER CONSENSUS SUBMISSION:
 - Do not show the full batch by default.
 - After consensus-submitting eligible questions, output the summary first.
-- Then include only REJECTED/UNRESOLVED question blocks for Yinon review.
+- Then include only rejected/unresolved/held question blocks for Yinon review.
 - If no questions need review, output only the summary.
 
-For each REJECTED/UNRESOLVED valid question:
+For each held valid question:
 ID:N
-🔴 [original question]
-[orig opt1] | [orig opt2] | [orig opt3] | [orig opt4] | ✓ [correct answer]
-🟢 [rephrased question]
-[new opt1] | [new opt2] | [new opt3] | [new opt4] | ✓ [correct answer]
-📁 [category_id] | ⚡ [difficulty] | 🎯 [score]/10
-🛟 הצעה בטוחה:
+Original: [original question]
+[orig opt1] | [orig opt2] | [orig opt3] | [orig opt4] | correct: [correct answer]
+Refined: [rephrased question]
+[new opt1] | [new opt2] | [new opt3] | [new opt4] | correct: [correct answer]
+Category: [category_id] | difficulty: [difficulty] | score: [score]/10
+{profile['safe_header']}
 [safe question]
-[safe opt1] | [safe opt2] | [safe opt3] | [safe opt4] | ✓ [safe correct answer]
-למה זה בטוח: [short reason tied to Alfred's flag/rejection]
-מקורות: [URLs, if web verification was used]
+[safe opt1] | [safe opt2] | [safe opt3] | [safe opt4] | correct: [safe correct answer]
+{profile['why_safe']} [short reason tied to Alfred's flag/rejection]
+{profile['sources']} [URLs, if web verification was used]
 
 If score < 5, add this line directly under the question block:
-⚠️ דירוג נמוך — [short reason]
+{profile['low_score']}
 
----
-
-For UNRESOLVED/SKIP questions:
-ID:N — ⚠️ דילוג — שאלה פגומה בבסיס הנתונים
-
----
-
-If you have concerns about a question but it is still processable, add this line directly under that question block:
-🚩 [short reason why the question may be problematic]
-
----
-
-For questions where rephrasing INVERTED the question structure (old correct answer no longer fits the new question):
-ID:N
-🔴 [original question]
-[original options] | ✓ [old correct answer]
-🟢 [rephrased question]
-[new options] | ✓ [NEW correct answer]
-📁 [category_id] | ⚡ [difficulty] | 🎯 [score]/10
-⚠️ שאלה הופכה — התשובה הנכונה עודכנה ל: [new correct answer]
-
----
+For unresolved/SKIP questions:
+{profile['skip_line']}
 
 If there are questions for review, end with this line:
-לבחור/לתקן את השאלות למעלה? ✅ / ❌
+{profile['choose_line']}
 
 If there are no review questions, end after the summary line.
 
 Do not return a success summary until after tool/command execution is complete. Final response rules:
-- If submit + verification succeeded, return only: "Hebrew trivia: updated X by consensus, sent Y for review." plus any held question blocks.
+- If submit + verification succeeded, return only: "{profile['summary']}" plus any held question blocks.
 - If submit or verification failed, return a concise failure summary naming the failed step.
 - No markdown code blocks."""
 
-def call_sonnet(prompt):
-    """
-    NOTE: This function is intentionally left as a passthrough.
-    run_batch.py outputs the prompt + raw questions for Alfred (Claude)
-    to process directly in the session. Alfred applies the option-change
-    rules and rephrasing, then the user approves before submit_changes.py runs.
-    Returning None here signals main() to print the prompt for Alfred instead.
-    """
-    return None
 
-def main():
-    batch_count = get_batch_count()
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--lang", choices=sorted(LANGUAGE_PROFILES), default="he")
+    parser.add_argument("--limit", type=int, default=10)
+    return parser.parse_args()
 
-    last_id = get_last_final_question_id()
+
+def main() -> None:
+    args = parse_args()
+    config = load_config(args.lang)
+    profile = LANGUAGE_PROFILES[args.lang]
+    supabase_url, supabase_key = load_credentials()
+
+    batch_count = get_batch_count(config)
+    last_id = get_last_final_question_id(config, supabase_url, supabase_key)
     next_id = last_id + 1
-    questions = fetch_questions(next_id)
+    questions = fetch_questions(config, supabase_url, supabase_key, next_id, args.limit)
     if not questions:
-        print(f"❌ לא נמצאו שאלות נוספות החל מ-ID {next_id}")
+        print(f"❌ {profile['no_more']} starting from ID {next_id}")
         return
 
-    categories = fetch_categories()
-    prompt = build_orchestrator_prompt(questions, categories)
-    
-    # Output the prompt for Alfred to process directly in the session
-    print(f"📋 **בצ'ים {batch_count + 1} — {len(questions)} שאלות | IDs {questions[0]['id']}–{questions[-1]['id']}**")
+    artifact_dir(config).mkdir(parents=True, exist_ok=True)
+    categories = fetch_categories(config, supabase_url, supabase_key)
+    prompt = build_prompt(config, questions, categories)
+
+    print(
+        f"📋 **{profile['batch_label']} {batch_count + 1} — "
+        f"{len(questions)} questions | IDs {questions[0]['id']}–{questions[-1]['id']}**"
+    )
     print()
-    print("Alfred — process the following questions using the rules below:")
+    print(profile["process_line"])
     print()
     print(prompt)
-    
-    # Increment batch count
-    increment_batch_count()
-    print(f"\n✅ בצ'ים {batch_count + 1} מוכן לעיבוד.", file=sys.stderr)
+
+    increment_batch_count(config)
+    print(f"\n✅ {profile['batch_label']} {batch_count + 1} {profile['ready']}.", file=sys.stderr)
+
 
 if __name__ == "__main__":
     main()

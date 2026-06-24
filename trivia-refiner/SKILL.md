@@ -1,13 +1,31 @@
 ---
 name: trivia-refiner
-description: "Refine Hebrew trivia questions through a semi-auto workflow: process batches, automatically submit clean high-confidence questions via update_question, and send only flagged/low-confidence/reconstructed questions to Yinon for review."
+description: "Refine Hebrew or English trivia questions with a config-driven semi-auto workflow, guarded consensus submission, and explicit held-question review."
 ---
 
 # Trivia Refiner — Semi-Auto Review Workflow
 
 **🎯 DATABASE: Quiz Supabase (`uhfsfedwteeoxsvixvtr`)**
 
-This skill refines Hebrew trivia questions with guarded automation. Yinon has approved semi-auto mode: clean high-confidence questions may be submitted automatically, while risky questions must be held for review.
+This skill refines Hebrew and English trivia questions with guarded automation. Yinon has approved semi-auto mode: clean high-confidence questions may be submitted automatically, while risky questions must be held for review.
+
+Language selection is explicit and config-driven. Do not rely on session memory to choose the language:
+
+```bash
+python3 scripts/run_batch.py --lang he
+python3 scripts/run_batch.py --lang en
+python3 scripts/submit_changes.py changes.json --lang he
+python3 scripts/submit_changes.py changes.json --lang en
+```
+
+Configs:
+- `config/he.json`: `raw_questions_he` -> `questions_he`, tracking `memory/trivia-refiner-processed.json`, artifacts `memory/trivia-consensus/he`
+- `config/en.json`: `questions_raw_en` -> `questions_en`, tracking `memory/trivia-refiner-en-processed.json`, artifacts `memory/trivia-consensus/en`
+
+Compatibility:
+- Hebrew cron wrapper calls `run_batch.py --lang he`
+- English cron wrapper calls `run_batch.py --lang en`
+- The old English skill wrapper delegates to this unified runner with `--lang en`
 
 **Current mode:** Auto-submit only clean questions with score **7+**. Send all flagged, reconstructed, fragile, or score ≤6 questions to Yinon before any DB write for those held items.
 

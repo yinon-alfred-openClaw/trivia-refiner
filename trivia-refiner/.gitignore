@@ -1,6 +1,7 @@
 # Runtime state (never commit)
 memory/
 *.json
+!config/*.json
 *.log
 *.tmp
 
