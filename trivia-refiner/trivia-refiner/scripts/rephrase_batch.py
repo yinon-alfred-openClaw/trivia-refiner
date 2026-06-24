@@ -92,6 +92,7 @@ TASK 1: CHECK FOR DAMAGED QUESTIONS
     - Try to infer the real question from the options and correct answer
     - If you can reconstruct a sensible question, use it
     - If you CANNOT understand what the question should be, mark as [DAMAGED] and skip
+  • Do NOT mark a question damaged just because it has only two answer options. True/false questions with Option 1/2 only and Option 3/4 null/empty are valid.
   • A damaged question will appear as: "DAMAGED: [reason] — skipping this question"
 
 TASK 2: REPHRASE each question
@@ -110,7 +111,8 @@ TASK 3: REVIEW wrong options
   • For each wrong option (not the correct answer):
     - REPLACE if too specific: unique names, niche references, copyrighted content
     - KEEP if generic: common cities, well-known figures, general concepts
-  • MANDATORY: Change at least 1 wrong option per question
+  • Try to change at least 1 wrong option when it is clearly safe.
+  • Exception: for true/false questions, preserve the two-answer structure (`נכון`/`לא נכון`) and keep Option 3/4 null/empty; do not invent extra distractors.
   • When replacing: use plausible alternative of same type
   • NEVER replace with the correct answer
   • Add note: "אופציה שונתה: [old] → [new]" for each change

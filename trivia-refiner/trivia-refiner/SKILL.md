@@ -53,8 +53,8 @@ When you reply `REPHRASE X-Y`:
 ### Fetch Stage
 
 **Script:** `scripts/fetch_batch.py`
-- Reads last processed ID from tracking
-- Fetches next 10 raw questions
+- Reads the highest existing ID from `questions_he`
+- Fetches the next 10 raw questions from `raw_questions_he`, starting at `max(questions_he.id) + 1`
 - Prints them for user review
 - Exits and waits
 
@@ -83,10 +83,12 @@ ID 204 | Hebrew question text...
    - Keep question meaning identical
    - Improve phrasing for clarity
    - Hebrew only (no English, no translations)
+   - True/false questions are valid when Option 1/2 are the only answers and Option 3/4 are null/empty; do not mark them damaged just because they have two answers
 3. **Review wrong options**
    - REPLACE if too specific (unique names, niche references, copyrighted content)
    - KEEP if generic (common cities, well-known figures, general concepts)
-   - MANDATORY: Change at least 1 wrong option per question
+   - Try to change at least 1 wrong option when it is clearly safe
+   - For true/false questions, preserve the two-answer structure (`נכון`/`לא נכון`) and leave Option 3/4 null/empty; do not invent extra distractors
    - When replacing: use plausible alternative of same type
    - NEVER replace with correct answer
 4. **Assign category & difficulty**
@@ -141,7 +143,7 @@ or:
 | **Always format for review first** | User sees exactly what will be changed |
 | **Wait for explicit "APPROVE" or "FIXES"** | No assumptions about user intent |
 | **Both rephrasing & review happen before sending** | User sees the finished product, not the work-in-progress |
-| **Track all changes** | Maintain history in tracking file |
+| **Track all changes** | Maintain history in tracking file; do not use it for next-batch selection |
 
 ---
 
@@ -201,7 +203,7 @@ python3 scripts/update_batch.py 203-212
 2. Validates all changes
 3. Calls `update_question` RPC function for each question
 4. Updates raw_questions_he + questions_he (both tables)
-5. Updates tracking file
+5. Updates tracking file for audit/history only; the next batch is selected from `questions_he`
 6. Confirms to user
 
 **Safety:** Only runs on explicit "APPROVE" command

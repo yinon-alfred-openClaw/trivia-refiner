@@ -85,7 +85,7 @@ new_opt1 | new_opt2 | new_opt3 | new_opt4 | ✓ [correct]
 4. RPC function atomically:
    - Updates `raw_questions_he` (source table)
    - Upserts into `questions_he` (production table)
-5. Updates tracking file
+5. Updates tracking file for audit/history only; the next batch is selected from `questions_he`
 6. Confirms to user
 
 **Database impact:** DIRECT (actual changes to Quiz DB)

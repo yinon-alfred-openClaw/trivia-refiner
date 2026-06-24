@@ -28,7 +28,7 @@ So the effective model is simply:
 ### `scripts/run_batch.py`
 Main entrypoint.
 
-- No args: fetch next 10 questions after the highest tracked ID
+- No args: fetch next 10 questions from `raw_questions_he`, starting after the highest ID already present in `questions_he`
 - With a range like `193-202`: fetch that exact range
 - Fetches categories
 - Prints the full prompt for Alfred to process in-session
@@ -40,10 +40,10 @@ Writes approved changes back to Supabase.
 - Validates required fields
 - Updates `raw_questions_he`
 - Upserts into `questions_he`
-- Records success/failure in tracking
+- Records success/failure in tracking for audit/history
 
 ### `scripts/tracking.py`
-Manages local runtime tracking.
+Manages local runtime tracking. This is audit/history only; automatic batch selection uses `questions_he` as the source of truth.
 
 Tracking file:
 
@@ -54,7 +54,7 @@ Tracking file:
 Used for:
 - processed IDs
 - refined/failed status
-- highest processed ID
+- highest processed ID for audit/history; not the next-batch source of truth
 - batch count
 
 ## How to run it

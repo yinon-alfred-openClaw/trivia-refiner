@@ -8,7 +8,7 @@ import json
 import sys
 import urllib.request
 import os
-from tracking import get_stats, get_last_edited_id
+from tracking import get_stats
 
 # Load credentials from memory/supabase-creds.json
 creds_path = os.path.expanduser("~/.openclaw/workspace/memory/supabase-creds.json")
@@ -21,10 +21,29 @@ except Exception as e:
     print(f"Error loading credentials from {creds_path}: {e}")
     sys.exit(1)
 
+FINAL_TABLE = "questions_he"
+RAW_TABLE = "raw_questions_he"
+
+def get_last_final_question_id():
+    """Return the highest ID already present in questions_he."""
+    url = f"{SUPABASE_URL}/rest/v1/{FINAL_TABLE}?select=id&order=id.desc&limit=1"
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}"
+    }
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req) as response:
+            rows = json.loads(response.read().decode())
+    except Exception as e:
+        print(f"Error reading latest {FINAL_TABLE} id: {e}")
+        sys.exit(1)
+
+    return rows[0]["id"] if rows else 0
+
 def fetch_questions_from_id(start_id, limit=10):
-    """Fetch questions starting from a specific ID (greater than start_id)."""
-    # Use 'gt' (greater than) to skip the start_id itself
-    url = f"{SUPABASE_URL}/rest/v1/raw_questions_he?id=gt.{start_id}&limit={limit}&order=id.asc"
+    """Fetch questions starting from a specific raw question ID."""
+    url = f"{SUPABASE_URL}/rest/v1/{RAW_TABLE}?id=gte.{start_id}&limit={limit}&order=id.asc"
     headers = {
         "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}"
@@ -76,12 +95,12 @@ def main():
         print(f"📊 Tracking Stats: {stats['refined']} refined, {stats['failed']} failed")
         print(f"   Last updated: {stats['last_updated']}\n")
     
-    # Get the last edited ID from tracking
-    last_edited_id = get_last_edited_id()
+    # Use questions_he as the source of truth for the next raw ID.
+    last_edited_id = get_last_final_question_id()
     next_start_id = last_edited_id + 1
     
     print(f"🔄 Fetching 10 questions starting from ID {next_start_id}...")
-    questions = fetch_questions_from_id(last_edited_id, limit=10)
+    questions = fetch_questions_from_id(next_start_id, limit=10)
     
     if not questions:
         if last_edited_id == 0:
